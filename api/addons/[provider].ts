@@ -89,7 +89,8 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
     const provider = providerPart as Provider
     const env = getEnv()
     if (env.ENABLE_AUTHORIZED_ADDON_LOOKUPS !== 'true') {
-      send(response, 503, { message: 'Addon lookups are disabled until the operator configures a rights-cleared provider.' })
+      const manifestVariable = provider === 'torrentio' ? 'TORRENTIO_MANIFEST_URL' : 'HDHUB_MANIFEST_URL'
+      send(response, 503, { message: `${provider === 'torrentio' ? 'Torrentio' : 'HdHub'} lookups are disabled. The operator must review provider permissions, set ENABLE_AUTHORIZED_ADDON_LOOKUPS=true, and configure ${manifestVariable} on the server.` })
       return
     }
 

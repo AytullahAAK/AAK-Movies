@@ -36,13 +36,13 @@ npm run dev
 
 - `/` — featured titles, trending movies and series, collections
 - `/discover?media=movie|tv|all` — search, type switch, genre, year, language, and sort filters
+- `/discover?media=tv&collection=anime&genre=Animation&language=Japanese` — animated Japanese TV discovery shortcut
 - `/movie/:id` — movie metadata, cast, trailer, and recommendations
-- `/tv/:id` — TV metadata, seasons, cast, trailer, and recommendations
-- `/tv/:id/season/:seasonNumber` — season episode guide, including season zero when TMDB provides it
+- `/tv/:id` — TV metadata, cast, trailer, season selector, episode list, and inline playback
+- `/tv/:id/season/:seasonNumber` — legacy season guide; episode selection opens on the main series page
 - `/watch/movie/:id` — movie playback selector; Nxsha is selected by default
-- `/watch/tv/:id/:seasonNumber/:episodeNumber` — episode playback selector, season/episode selection, and adjacent-episode navigation
+- `/watch/tv/:id/:seasonNumber/:episodeNumber` — legacy deep link that redirects to the selected episode on `/tv/:id`
 - `/watch/:id` — existing movie alias
-- `/player` — Universal Player for direct video and built-in addon sources
 - `/sources` — built-in declarations and user-supplied HTTPS manifest registry
 - `/library`, `/profile`, `/admin`, `/about`, `/contact`, `/privacy`, `/terms`, `/copyright`
 
@@ -60,8 +60,8 @@ TMDB supplies metadata and artwork; it does not guarantee playable video. Movie 
 
 The title watch screens expose exactly two primary choices:
 
-1. **Nxsha Player** — selected by default. Movie URLs use `https://web.nxsha.app/embed/movie/{TMDB_MOVIE_ID}?color=orange`. TV episodes use `https://web.nxsha.app/embed/tv/{TMDB_TV_ID}/{SEASON_NUMBER}/{EPISODE_NUMBER}` without the movie color parameter. The mapping is explicit and rejects invalid IDs and episode numbers. The viewer UI shows a loading state, a 15-second iframe-load timeout message, reload and open-player controls; cross-origin iframe playback errors cannot be detected reliably. Provider permission, supported IDs, mobile behavior, and actual playback must be verified separately.
-2. **Universal Player** — accepts direct HTTPS MP4, WebM, and Ogg file URLs in a native HTML5 player, with browser controls and playback-speed selection. A normal webpage, iframe URL, torrent reference, or manifest is not a direct video file. Actual support still depends on the browser, host, media format, and access policy.
+1. **Default** — Nxsha is selected by default. Movie URLs use `https://web.nxsha.app/embed/movie/{TMDB_MOVIE_ID}?color=orange`. TV episodes use `https://web.nxsha.app/embed/tv/{TMDB_TV_ID}/{SEASON_NUMBER}/{EPISODE_NUMBER}`. The mapping uses the movie ID for movies and the series ID plus selected season and episode for TV. The viewer UI has a loading state and a concise timeout error; cross-origin iframe playback errors cannot be detected reliably, so iframe loading is not proof of playback.
+2. **Torrent** — the unified source interface requests both configured addon services for the current movie or selected TV episode. It does not accept pasted video URLs. Direct HTTPS MP4, WebM, and Ogg results returned by a configured source can use the native HTML5 player. A webpage, iframe, torrent reference, or manifest is not a direct video file. Torrent/magnet entries need a separate authorized streaming backend and are not resolved by this app.
 
 The two supplied manifests are registered as sanitized declarations in separate Torrentio and HdHub source sections inside Universal Player and `/sources`:
 
@@ -70,7 +70,7 @@ The two supplied manifests are registered as sanitized declarations in separate 
 
 Torrentio's live manifest endpoint is `https://torrentio.strem.fun/manifest.json`. Its manifest identifies scraped torrent streams. The supplied HdHub manifest also has a live manifest endpoint at `https://hdhub.thevolecitor.qzz.io/manifest.json`; its setup page generates a configured manifest URL and supports TorBox integration. That page describes the addon as a public web scraper and says not to use it for copyrighted media without permission. The app has separate source sections and sends two independent requests from Universal Player when a movie or episode is selected, but only after the server operator sets `ENABLE_AUTHORIZED_ADDON_LOOKUPS=true` and supplies each server-side manifest URL. The setting is off by default. This is a rights/configuration gate; do not enable it for content the operator is not authorized to access. User-supplied manifest URLs in `/sources` remain metadata-only and are saved in browser storage; do not put credential-bearing addon URLs there.
 
-The server obtains an IMDb ID from TMDB external IDs. Movie requests use that movie ID; TV requests use the series IMDb ID plus season and episode numbers (`tt…:season:episode`), never a TMDB episode ID. Each addon manifest is checked for its declared types, resources, and ID prefixes before a stream request. Requests run concurrently and each section reports loading, errors, empty results, or returned entries independently. Direct HTTPS MP4/WebM/Ogg results use the native player. Iframe playback is allowed only for exact server-configured hosts. Torrent/magnet results are displayed as requiring an authorized streaming service and are never sent to the HTML5 video element or resolved by this app. The server preserves provider rate-limit/auth errors, handles timeouts and invalid responses, and does not expose credential-bearing manifest URLs.
+The server obtains an IMDb ID from TMDB external IDs. Movie requests use that movie ID; TV requests use the series IMDb ID plus season and episode numbers (`tt…:season:episode`), never a TMDB episode ID. Each addon manifest is checked for its declared types, resources, and ID prefixes before a stream request. Requests run concurrently and each section reports loading, errors, empty results, or returned entries independently. Direct HTTPS MP4/WebM/Ogg results use the native player. Iframe playback is allowed only for exact server-configured hosts. Torrent/magnet results are displayed as requiring an authorized streaming service and are never sent to the HTML5 video element or resolved by this app. The server preserves provider rate-limit/auth errors, handles timeouts and invalid responses, and does not expose credential-bearing manifest URLs. The addon feature is currently disabled unless the operator provides the server-side opt-in and reviewed provider configuration; the production endpoint must be checked independently after that setup.
 
 ## SEO, robots, and sitemap
 
@@ -78,7 +78,9 @@ Route changes set a title, description, Open Graph title/description/type, and T
 
 ## Vercel deployment
 
-Use Vite as the framework, `npm run build` as the build command, and `dist` as the output directory. In the correct Vercel project, configure `TMDB_READ_ACCESS_TOKEN` for the **Production** environment and set `VITE_SITE_URL` to the real HTTPS site origin. The `/api/tmdb/[...path].ts` function keeps the Read Access Token server-side; the public `/api/tmdb/status` diagnostic exposes only whether it exists. Ensure deep links fall back to the SPA while `/api/tmdb/*` continues to route to functions. After changing environment variables, redeploy and verify both `/api/tmdb/status` and `/api/tmdb/trending/all/day`. Do not set the Read Access Token under a `VITE_` name.
+Use Vite as the framework, `npm run build` as the build command, and `dist` as the output directory. In the Vercel dashboard, open the **AAK Movies project → Settings → Environment Variables** and add `TMDB_READ_ACCESS_TOKEN` with the TMDB Read Access Token as its value. Select **Production** (and add separate Preview/Development entries only if those environments need the API), save, then create a new production deployment from **Deployments → Redeploy** or push a new commit. The token stays in the server function at `/api/tmdb/proxy.ts`; `/api/tmdb/status` reveals only whether it is present. Verify both `/api/tmdb/status` and `/api/tmdb/proxy?path=%2Ftrending%2Fall%2Fday` after deployment. Do not set the Read Access Token under a `VITE_` name. Add `VITE_SITE_URL` only when the real HTTPS site origin is known.
+
+Addon variables are separate and must remain unset/off unless the operator has confirmed provider permission and authorized content: set `ENABLE_AUTHORIZED_ADDON_LOOKUPS=true` only after that review, `TORRENTIO_MANIFEST_URL` to an approved configured Torrentio manifest endpoint, and `HDHUB_MANIFEST_URL` to a configured URL generated by HdHub's setup flow. `AUTHORIZED_EMBED_HOSTS` is optional and should contain only exact reviewed hostnames. The app currently has no configured production addon credentials or authorization confirmation; do not enable these variables just to remove the setup message.
 
 ## Checks
 
@@ -88,7 +90,7 @@ npm run build
 npm run test
 ```
 
-`npm run lint` runs the TypeScript project check. `npm run test` runs Node's built-in test runner for direct-media URL validation and movie/TV Nxsha URL mapping. External iframe playback and provider authorization need independent verification before being described as operational.
+`npm run lint` runs the TypeScript project check. `npm run test` runs Node's built-in test runner for TMDB proxy auth, addon request/ID mapping, provider response handling, and Nxsha movie/TV URL mapping. External iframe playback and provider authorization need independent verification before being described as operational.
 
 ## Commit and push
 

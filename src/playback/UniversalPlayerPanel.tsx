@@ -1,8 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState } from 'react'
 import { ExternalLink, FileVideo2 } from 'lucide-react'
 import { builtInManifests, describeManifestResource } from './builtInManifests'
 import { NativeVideoPlayer, type DirectMediaSource } from './NativeVideoPlayer'
-import { parseDirectMediaUrl } from './directMediaUrl'
 
 export type UniversalMediaContext = {
   media_type: 'movie' | 'tv'
@@ -32,16 +31,23 @@ function emptyAddonStates(): Record<string, AddonSourceState> {
 }
 
 export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaContext }: { contextLabel?: string; mediaContext?: UniversalMediaContext }) {
-  const [url, setUrl] = useState('')
   const [title, setTitle] = useState(contextLabel)
   const [source, setSource] = useState<DirectMediaSource | null>(null)
-  const [error, setError] = useState('')
   const [mediaError, setMediaError] = useState('')
   const [playerKey, setPlayerKey] = useState(0)
   const [addonSources, setAddonSources] = useState<Record<string, AddonSourceState>>(emptyAddonStates)
   const [embedSource, setEmbedSource] = useState<{ url: string; title: string } | null>(null)
   const [externalSource, setExternalSource] = useState<string | null>(null)
   const contextKey = mediaContext ? `${mediaContext.media_type}:${mediaContext.tmdbId}:${mediaContext.seasonNumber ?? ''}:${mediaContext.episodeNumber ?? ''}` : ''
+
+  useEffect(() => {
+    setTitle(contextLabel)
+    setSource(null)
+    setEmbedSource(null)
+    setExternalSource(null)
+    setMediaError('')
+    setPlayerKey(key => key + 1)
+  }, [contextKey, contextLabel])
 
   useEffect(() => {
     if (!mediaContext) {
@@ -106,42 +112,14 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
     }
   }
 
-  const play = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setError('')
-    setMediaError('')
-    try {
-      const directSource = parseDirectMediaUrl(url.trim())
-      setEmbedSource(null)
-      setExternalSource(null)
-      setSource(directSource)
-      setPlayerKey(key => key + 1)
-    } catch (cause) {
-      setSource(null)
-      setEmbedSource(null)
-      setExternalSource(null)
-      setError(cause instanceof Error ? cause.message : 'Enter a valid direct media URL.')
-    }
-  }
-
   return <section className="universal-player" aria-label="Universal Player">
     <div className="universal-heading">
-      <div><div className="section-kicker">UNIVERSAL PLAYER</div><h2>Choose an authorized source</h2></div>
-      <span className="source-kind"><FileVideo2 size={15} /> Direct video + built-in sources</span>
+      <div><div className="section-kicker">TORRENT PLAYER</div><h2>Sources for this title</h2></div>
+      <span className="source-kind"><FileVideo2 size={15} /> Built-in addon results</span>
     </div>
 
     {mediaContext && <p className="universal-context" role="status">{mediaContext.title} · {mediaContext.media_type === 'movie' ? 'Movie' : 'TV series'} · TMDB ID {mediaContext.tmdbId}{mediaContext.media_type === 'tv' && Number.isSafeInteger(mediaContext.seasonNumber) && Number.isSafeInteger(mediaContext.episodeNumber) ? ` · S${mediaContext.seasonNumber}E${mediaContext.episodeNumber}` : ''}</p>}
 
-    <form className="universal-direct-form" onSubmit={play}>
-      <label>Video title
-        <input className="admin-input" value={title} onChange={event => setTitle(event.target.value)} placeholder="Video title" />
-      </label>
-      <label>Direct HTTPS video URL
-        <input className="admin-input" value={url} onChange={event => setUrl(event.target.value)} type="url" inputMode="url" placeholder="https://media.example/video.mp4" aria-describedby="direct-url-help" />
-      </label>
-      <div className="direct-form-actions"><button className="button button-primary" type="submit">Play direct video</button><span id="direct-url-help">MP4, WebM, or Ogg only. A webpage, iframe, or torrent manifest is not a direct video file.</span></div>
-    </form>
-    {error && <p className="form-error" role="alert">{error}</p>}
     {source && <div className="native-player-wrap" key={playerKey}>
       <NativeVideoPlayer source={source} title={title.trim() || 'Video'} onError={() => setMediaError('This media could not be played. Check the file format, URL, and whether the host permits playback.')} />
     </div>}
@@ -165,6 +143,5 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
         <a className="subtle-link" href={manifest.setupUrl} target="_blank" rel="noreferrer">Configure {manifest.name} <ExternalLink size={14} /></a>
       </section>)}
     </div>
-    <p className="player-disclaimer">Use direct media only when you are authorized to play it. Browser support and host access policies still apply.</p>
   </section>
 }

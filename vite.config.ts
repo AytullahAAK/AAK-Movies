@@ -2,8 +2,8 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { createAddonHandler } from './api/addons/[provider].ts'
 
-const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|genre\/(?:movie|tv)\/list|movie\/\d+(?:\/external_ids)?|tv\/\d+(?:\/external_ids|\/season\/\d+)?)$/
-const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'with_original_language'])
+const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|discover\/tv|genre\/(?:movie|tv)\/list|movie\/\d+(?:\/external_ids)?|tv\/\d+(?:\/external_ids|\/season\/\d+)?)$/
+const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'with_original_language', 'with_genres', 'sort_by'])
 
 function localTmdbProxy(env: Record<string, string>, mode: string): Plugin {
   return {

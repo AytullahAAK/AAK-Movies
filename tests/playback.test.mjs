@@ -11,8 +11,7 @@ async function importTypeScript(path) {
   return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)
 }
 
-const [{ parseDirectMediaUrl }, { getExternalPlayerUrl, nxshaPlaybackSource }] = await Promise.all([
-  importTypeScript('src/playback/directMediaUrl.ts'),
+const [{ getExternalPlayerUrl, nxshaPlaybackSource }] = await Promise.all([
   importTypeScript('src/playback/sources.ts'),
 ])
 const { default: tmdbHandler } = await importTypeScript('api/tmdb/proxy.ts')
@@ -29,25 +28,6 @@ function mockResponse() {
     end(body = '') { this.body = body instanceof Uint8Array ? new TextDecoder().decode(body) : String(body) },
   }
 }
-
-test('direct HTTPS MP4, WebM, and Ogg URLs are accepted', () => {
-  assert.deepEqual(parseDirectMediaUrl('https://media.example/feature.mp4?sig=demo'), {
-    url: 'https://media.example/feature.mp4?sig=demo', contentType: 'video/mp4',
-  })
-  assert.equal(parseDirectMediaUrl('https://media.example/feature.webm').contentType, 'video/webm')
-  assert.equal(parseDirectMediaUrl('https://media.example/feature.ogv').contentType, 'video/ogg')
-})
-
-test('webpages, manifests, embeds, and non-HTTPS media are rejected', () => {
-  for (const value of [
-    'https://example.org/watch/123',
-    'https://example.org/manifest.json',
-    'https://example.org/embed/movie/123',
-    'https://example.org/video.m3u8',
-    'http://media.example/video.mp4',
-    'https://user:password@media.example/video.mp4',
-  ]) assert.throws(() => parseDirectMediaUrl(value))
-})
 
 test('Nxsha movie and episode URLs keep movie and TV identifiers separate', () => {
   assert.equal(getExternalPlayerUrl(nxshaPlaybackSource, { media_type: 'movie', id: 550 }), 'https://web.nxsha.app/embed/movie/550?color=orange')
@@ -220,5 +200,67 @@ test('addon iframe playback requires an exact operator-approved HTTPS host', asy
     assert.equal(JSON.parse(blockedResponse.body).streams[0].playbackKind, 'unsupported')
   } finally {
     globalThis.fetch = originalFetch
+  }
+})
+
+test('anime discovery proxy preserves the intended TMDB filters', async () => {
+  const originalToken = process.env.TMDB_READ_ACCESS_TOKEN
+  const originalFetch = globalThis.fetch
+  process.env.TMDB_READ_ACCESS_TOKEN = 'unit-test-token'
+  let target
+  globalThis.fetch = async input => {
+    target = new URL(String(input))
+    return new Response('{"results":[]}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  try {
+    const response = mockResponse()
+    await tmdbHandler({ method: 'GET', url: '/api/tmdb/proxy?path=%2Fdiscover%2Ftv&with_genres=16&with_original_language=ja&sort_by=popularity.desc' }, response)
+    assert.equal(response.statusCode, 200)
+    assert.equal(target.pathname, '/3/discover/tv')
+    assert.equal(target.searchParams.get('with_genres'), '16')
+    assert.equal(target.searchParams.get('with_original_language'), 'ja')
+    assert.equal(target.searchParams.get('sort_by'), 'popularity.desc')
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalToken === undefined) delete process.env.TMDB_READ_ACCESS_TOKEN
+    else process.env.TMDB_READ_ACCESS_TOKEN = originalToken
+  }
+})
+
+test('direct source playback accepts video files and rejects webpage or manifest URLs', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async input => {
+    const url = new URL(String(input))
+    if (url.hostname === 'api.themoviedb.org') return new Response('{"imdb_id":"tt0111161"}', { status: 200, headers: { 'content-type': 'application/json' } })
+    if (url.pathname.endsWith('/manifest.json')) return new Response(JSON.stringify({ types: ['movie'], resources: ['stream'], idPrefixes: ['tt'] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    return new Response(JSON.stringify({ streams: [
+      { name: 'Authorized media file', url: 'https://media.example/feature.webm' },
+      { name: 'Webpage', url: 'https://example.org/watch/123' },
+      { name: 'Manifest', url: 'https://example.org/manifest.json' },
+      { name: 'HLS playlist', url: 'https://media.example/video.m3u8' },
+    ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  try {
+    const handler = createAddonHandler(() => ({ ENABLE_AUTHORIZED_ADDON_LOOKUPS: 'true', TMDB_READ_ACCESS_TOKEN: 'unit-test-token', TORRENTIO_MANIFEST_URL: 'https://torrentio.strem.fun/manifest.json' }))
+    const response = mockResponse()
+    await handler({ method: 'GET', url: '/api/addons/torrentio?media_type=movie&tmdb_id=278' }, response)
+    assert.equal(response.statusCode, 200)
+    const streams = JSON.parse(response.body).streams
+    assert.equal(streams[0].playbackKind, 'direct-video')
+    assert.equal(streams[0].contentType, 'video/webm')
+    assert.deepEqual(streams.slice(1).map(stream => stream.playbackKind), ['unsupported', 'unsupported', 'unsupported'])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('addon setup errors state the exact missing operator configuration', async () => {
+  const handler = createAddonHandler(() => ({}))
+  for (const [provider, variable] of [['torrentio', 'TORRENTIO_MANIFEST_URL'], ['hdhub', 'HDHUB_MANIFEST_URL']]) {
+    const response = mockResponse()
+    await handler({ method: 'GET', url: `/api/addons/${provider}?media_type=movie&tmdb_id=550` }, response)
+    assert.equal(response.statusCode, 503)
+    assert.match(JSON.parse(response.body).message, /ENABLE_AUTHORIZED_ADDON_LOOKUPS=true/)
+    assert.match(JSON.parse(response.body).message, new RegExp(variable))
   }
 })

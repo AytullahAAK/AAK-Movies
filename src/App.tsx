@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowDownWideNarrow, ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Compass, ExternalLink, Heart, Info, Instagram, Library, ListFilter, LockKeyhole, Mail, Menu, MonitorPlay, Moon, Play, Search, Settings, ShieldCheck, Sparkles, Star, Sun, Twitter, Volume2, VolumeX, X } from 'lucide-react'
-import { demoHero, genres, getMediaTrailerKey, getMovieDetails, getTvDetails, getTvSeason, mediaDate, mediaTypeLabel, mediaYear, movies, searchCatalog, trendingAllDay, type Media, type Movie, type MovieDetails, type TvDetails, type TvEpisode, type TvShow } from './data'
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Compass, ExternalLink, Film, Heart, House, Info, Instagram, Library, ListFilter, LockKeyhole, Magnet, Mail, Menu, MonitorPlay, Moon, Play, Search, Settings, ShieldCheck, Sparkles, Star, Sun, Tv, Twitter, UserRound, Volume2, VolumeX, X } from 'lucide-react'
+import { animeTvCatalog, demoHero, genres, getMediaTrailerKey, getMovieDetails, getTvDetails, getTvSeason, mediaDate, mediaTypeLabel, mediaYear, movies, searchCatalog, trendingAllDay, type CastMember, type Media, type Movie, type MovieDetails, type TvDetails, type TvEpisode, type TvShow } from './data'
 import { getExternalPlayerUrl, nxshaPlaybackSource, type PlaybackTarget } from './playback/sources'
 import { UniversalPlayerPanel } from './playback/UniversalPlayerPanel'
 import { builtInManifests, describeManifestResource, type StremioResource } from './playback/builtInManifests'
@@ -11,7 +11,12 @@ function isSaved(saved: Media[], item: Media) { return saved.some(value => media
 
 function App() {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [theme, setTheme] = useState<'light' | 'night'>(() => localStorage.getItem('aak-movies-theme') === 'night' ? 'night' : 'light')
+  const [theme, setTheme] = useState<'light' | 'night'>(() => {
+    const savedTheme = localStorage.getItem('aak-movies-theme')
+    const initialTheme = savedTheme === 'light' || savedTheme === 'night' ? savedTheme : window.matchMedia('(max-width: 700px)').matches ? 'night' : 'light'
+    document.documentElement.dataset.theme = initialTheme
+    return initialTheme
+  })
   const [saved, setSaved] = useState<Media[]>([])
   const [toast, setToast] = useState('')
   const location = useLocation()
@@ -27,9 +32,8 @@ function App() {
       <Route path="/tv/:id" element={<TvDetailsPage key={location.pathname} saved={saved} toggleSaved={toggleSaved} />} />
       <Route path="/tv/:id/season/:seasonNumber" element={<TvSeasonPage key={location.pathname} />} />
       <Route path="/watch/movie/:id" element={<MovieWatchPage key={location.pathname} />} />
-      <Route path="/watch/tv/:id/:seasonNumber/:episodeNumber" element={<EpisodeWatchPage key={location.pathname} />} />
+      <Route path="/watch/tv/:id/:seasonNumber/:episodeNumber" element={<LegacyEpisodeRedirect />} />
       <Route path="/watch/:id" element={<MovieWatchPage key={location.pathname} />} />
-      <Route path="/player" element={<DirectPlayer />} />
       <Route path="/sources" element={<ManifestManager />} />
       <Route path="/library" element={<LibraryPage saved={saved} toggleSaved={toggleSaved} />} />
       <Route path="/profile" element={<Profile />} />
@@ -41,15 +45,39 @@ function App() {
       <Route path="/copyright" element={<Policy title="Content & copyright." kicker="RIGHTS & REMOVAL" text="AAK Movies does not host movie or television files. External playback is handled by providers. Rights holders should contact the AAK Movies operator with the title, rights documentation, and contact information." />} />
       <Route path="*" element={<InfoPage title="A scene missing from the reel." kicker="404" text="We couldn’t find that page. Return to the collection and find a new favorite." />} />
     </Routes></main>
+    <BottomNavigation />
     <Footer />{toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
   </div>
 }
 
 function Header({ menuOpen, setMenuOpen, theme, setTheme }: { menuOpen: boolean; setMenuOpen: (open: boolean) => void; theme: 'light' | 'night'; setTheme: (theme: 'light' | 'night') => void }) {
   return <header className="site-header"><Link className="brand" to="/" aria-label="AAK Movies home"><span className="brand-logo-plate"><img src="/images/aak-movies-logo.png" alt="" /></span><span>AAK Movies</span></Link>
-    <nav className={`main-nav ${menuOpen ? 'is-open' : ''}`} aria-label="Main navigation"><NavLink to="/discover"><Compass size={15} />Discover</NavLink><NavLink to="/library"><Library size={15} />My library</NavLink><NavLink to="/player"><MonitorPlay size={15} />Player</NavLink><NavLink to="/sources"><Settings size={15} />Sources</NavLink><NavLink to="/about" className="mobile-link">About</NavLink></nav>
+    <nav className={`main-nav ${menuOpen ? 'is-open' : ''}`} aria-label="Main navigation"><NavLink to="/discover"><Compass size={15} />Discover</NavLink><NavLink to="/library"><Library size={15} />My library</NavLink><NavLink to="/sources"><Settings size={15} />Sources</NavLink><NavLink to="/about" className="mobile-link">About</NavLink></nav>
     <div className="header-actions"><button className="theme-toggle" onClick={() => setTheme(theme === 'light' ? 'night' : 'light')} aria-label={theme === 'light' ? 'Switch to AMOLED night mode' : 'Switch to light mode'} title={theme === 'light' ? 'Night mode' : 'Light mode'}>{theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}</button><Link to="/discover" className="header-search" aria-label="Search movies and TV shows"><Search size={17} /></Link><Link to="/profile" className="avatar" aria-label="Your profile">A</Link><button className="menu-toggle" onClick={() => setMenuOpen(!menuOpen)} aria-label={menuOpen ? 'Close navigation' : 'Open navigation'}>{menuOpen ? <X /> : <Menu />}</button></div>
   </header>
+}
+
+function BottomNavigation() {
+  const location = useLocation()
+  const query = new URLSearchParams(location.search)
+  const isDiscover = location.pathname === '/discover'
+  const media = query.get('media') ?? 'movie'
+  const genre = query.get('genre')
+  const language = query.get('language')
+  const collection = query.get('collection')
+  const items = [
+    { label: 'Home', to: '/', icon: House, active: location.pathname === '/' },
+    { label: 'Search', to: '/discover', icon: Search, active: isDiscover && !genre && !language && media === 'movie' && !query.get('media') },
+    { label: 'Movies', to: '/discover?media=movie', icon: Film, active: isDiscover && query.get('media') === 'movie' && !genre },
+    { label: 'TV Shows', to: '/discover?media=tv', icon: Tv, active: isDiscover && media === 'tv' && !genre },
+    { label: 'Anime', to: '/discover?media=tv&collection=anime&genre=Animation&language=Japanese', icon: Sparkles, active: isDiscover && media === 'tv' && collection === 'anime' },
+    { label: 'Profile', to: '/profile', icon: UserRound, active: location.pathname === '/profile' },
+  ]
+  return <nav className="bottom-navigation" aria-label="Quick navigation">
+    {items.map(({ label, to, icon: Icon, active }) => <Link key={label} to={to} className={active ? 'active' : ''} aria-label={label} aria-current={active ? 'page' : undefined}>
+      <Icon size={18} aria-hidden="true" /><span>{label}</span>
+    </Link>)}
+  </nav>
 }
 
 function usePageMeta(title: string, description: string, type = 'website') {
@@ -163,16 +191,17 @@ function Home({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: Medi
 function Discover({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: Media) => void }) {
   const location = useLocation(); const navigate = useNavigate()
   const initial = new URLSearchParams(location.search).get('media')
+  const animeMode = new URLSearchParams(location.search).get('collection') === 'anime'
   const [mediaFilter, setMediaFilter] = useState<'movie' | 'tv' | 'all'>(initial === 'tv' || initial === 'all' ? initial : 'movie')
-  const [query, setQuery] = useState(''); const [selectedGenre, setSelectedGenre] = useState('All films'); const [year, setYear] = useState('Any year'); const [language, setLanguage] = useState('Any language'); const [sort, setSort] = useState('Popular'); const [results, setResults] = useState<Media[]>(import.meta.env.DEV ? movies : []); const [error, setError] = useState(''); const [loading, setLoading] = useState(!import.meta.env.DEV)
-  usePageMeta(`${mediaFilter === 'tv' ? 'TV Shows' : mediaFilter === 'all' ? 'Movies & TV Shows' : 'Movies'} — Discover | AAK Movies`, 'Search and filter movies and TV series by title, genre, year, or language.')
-  useEffect(() => { const params = new URLSearchParams(location.search); setSelectedGenre(params.get('genre') ?? 'All films'); const media = params.get('media'); setMediaFilter(media === 'tv' || media === 'all' ? media : 'movie') }, [location.search])
-  useEffect(() => { let active = true; setLoading(true); setError(''); const timer = window.setTimeout(() => { searchCatalog(query, mediaFilter).then(data => { if (active) setResults(data) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Catalog unavailable.') }).finally(() => { if (active) setLoading(false) }) }, 250); return () => { active = false; clearTimeout(timer) } }, [query, mediaFilter])
-  const filtered = useMemo(() => { let list = results.filter(item => (selectedGenre === 'All films' || item.genre.toLowerCase() === selectedGenre.toLowerCase()) && (year === 'Any year' || mediaYear(item) === year) && (language === 'Any language' || item.language === language)); if (sort === 'Top rated') list = [...list].sort((a, b) => (b.vote_average ?? -1) - (a.vote_average ?? -1)); if (sort === 'Newest') list = [...list].sort((a, b) => mediaDate(b)?.localeCompare(mediaDate(a) ?? '') ?? 0); return list }, [results, selectedGenre, year, language, sort])
-  const chooseMedia = (value: 'movie' | 'tv' | 'all') => { setMediaFilter(value); setSelectedGenre('All films'); navigate(value === 'movie' ? '/discover' : `/discover?media=${value}`, { replace: true }) }
+  const [query, setQuery] = useState(''); const [selectedGenre, setSelectedGenre] = useState('All films'); const [year, setYear] = useState('Any year'); const [language, setLanguage] = useState(new URLSearchParams(location.search).get('language') ?? 'Any language'); const [sort, setSort] = useState('Popular'); const [results, setResults] = useState<Media[]>(import.meta.env.DEV ? movies : []); const [error, setError] = useState(''); const [loading, setLoading] = useState(!import.meta.env.DEV)
+  usePageMeta(`${animeMode ? 'Anime' : mediaFilter === 'tv' ? 'TV Shows' : mediaFilter === 'all' ? 'Movies & TV Shows' : 'Movies'} — Discover | AAK Movies`, 'Search and filter movies and TV series by title, genre, year, or language.')
+  useEffect(() => { const params = new URLSearchParams(location.search); setSelectedGenre(params.get('genre') ?? 'All films'); setLanguage(params.get('language') ?? 'Any language'); const media = params.get('media'); setMediaFilter(media === 'tv' || media === 'all' ? media : 'movie') }, [location.search])
+  useEffect(() => { let active = true; setLoading(true); setError(''); const timer = window.setTimeout(() => { (animeMode ? animeTvCatalog() : searchCatalog(query, mediaFilter)).then(data => { if (active) setResults(data) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Catalog unavailable.') }).finally(() => { if (active) setLoading(false) }) }, animeMode ? 0 : 250); return () => { active = false; clearTimeout(timer) } }, [query, mediaFilter, animeMode])
+  const filtered = useMemo(() => { let list = results.filter(item => (!animeMode || item.media_type === 'tv') && (!animeMode || !query.trim() || item.title.toLowerCase().includes(query.trim().toLowerCase())) && (selectedGenre === 'All films' || item.genre.toLowerCase() === selectedGenre.toLowerCase()) && (year === 'Any year' || mediaYear(item) === year) && (language === 'Any language' || item.language === language)); if (sort === 'Top rated') list = [...list].sort((a, b) => (b.vote_average ?? -1) - (a.vote_average ?? -1)); if (sort === 'Newest') list = [...list].sort((a, b) => mediaDate(b)?.localeCompare(mediaDate(a) ?? '') ?? 0); return list }, [results, selectedGenre, year, language, sort, animeMode, query])
+  const chooseMedia = (value: 'movie' | 'tv' | 'all') => { setMediaFilter(value); setSelectedGenre('All films'); setLanguage('Any language'); navigate(value === 'movie' ? '/discover' : `/discover?media=${value}`, { replace: true }) }
   return <div className="page-wrap"><div className="page-intro"><div className="section-kicker">A WORLD OF STORIES</div><h1>Find your next<br /><em>favorite.</em></h1><p>A thoughtfully gathered collection of movies and series for wherever your curiosity takes you.</p></div>
     <div className="media-switch" role="group" aria-label="Choose content type">{(['movie', 'tv', 'all'] as const).map(value => <button key={value} className={mediaFilter === value ? 'active' : ''} aria-pressed={mediaFilter === value} onClick={() => chooseMedia(value)}>{value === 'movie' ? 'Movies' : value === 'tv' ? 'TV Shows' : 'All'}</button>)}</div>
-    <div className="discover-tools"><label className="search-field"><Search size={18} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={`Search ${mediaFilter === 'movie' ? 'movies' : mediaFilter === 'tv' ? 'TV shows' : 'movies and TV shows'}…`} aria-label="Search movies and TV shows" />{query && <button onClick={() => setQuery('')} aria-label="Clear search"><X size={16} /></button>}</label><div className="filter-row"><div className="genre-filter">{genres.map(item => <button key={item} className={selectedGenre === item ? 'filter-chip active' : 'filter-chip'} onClick={() => { setSelectedGenre(item); navigate(item === 'All films' ? '/discover' : `/discover?genre=${encodeURIComponent(item)}&media=${mediaFilter}`, { replace: true }) }}>{item}</button>)}</div><div className="select-filters"><label><ListFilter size={14} /><select value={year} onChange={e => setYear(e.target.value)} aria-label="Filter by year"><option>Any year</option>{['2026', '2025', '2024', '2023', '2022', '2021'].map(v => <option key={v}>{v}</option>)}</select><ChevronDown size={13} /></label><label><ListFilter size={14} /><select value={language} onChange={e => setLanguage(e.target.value)} aria-label="Filter by language"><option>Any language</option>{['English', 'Japanese', 'Korean', 'French', 'Spanish', 'Hindi'].map(v => <option key={v}>{v}</option>)}</select><ChevronDown size={13} /></label><label><ArrowDownWideNarrow size={14} /><select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort results"><option>Popular</option><option>Top rated</option><option>Newest</option></select><ChevronDown size={13} /></label></div></div></div>
+    <div className="discover-tools"><label className="search-field"><Search size={18} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={`Search ${animeMode ? 'anime' : mediaFilter === 'movie' ? 'movies' : mediaFilter === 'tv' ? 'TV shows' : 'movies and TV shows'}…`} aria-label={animeMode ? 'Search anime' : 'Search movies and TV shows'} />{query && <button onClick={() => setQuery('')} aria-label="Clear search"><X size={16} /></button>}</label><div className="filter-row"><div className="genre-filter">{genres.map(item => <button key={item} className={selectedGenre === item ? 'filter-chip active' : 'filter-chip'} onClick={() => { setSelectedGenre(item); navigate(item === 'All films' ? '/discover' : `/discover?genre=${encodeURIComponent(item)}&media=${mediaFilter}`, { replace: true }) }}>{item}</button>)}</div><div className="select-filters"><label><ListFilter size={14} /><select value={year} onChange={e => setYear(e.target.value)} aria-label="Filter by year"><option>Any year</option>{['2026', '2025', '2024', '2023', '2022', '2021'].map(v => <option key={v}>{v}</option>)}</select><ChevronDown size={13} /></label><label><ListFilter size={14} /><select value={language} onChange={e => setLanguage(e.target.value)} aria-label="Filter by language"><option>Any language</option>{['English', 'Japanese', 'Korean', 'French', 'Spanish', 'Hindi'].map(v => <option key={v}>{v}</option>)}</select><ChevronDown size={13} /></label><label><ArrowDownWideNarrow size={14} /><select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort results"><option>Popular</option><option>Top rated</option><option>Newest</option></select><ChevronDown size={13} /></label></div></div></div>
      <div className="results-head"><span>{loading ? 'Finding titles…' : `${filtered.length} ${filtered.length === 1 ? 'title' : 'titles'} to explore`}</span><span>COLLECTED WITH CARE</span></div>{error ? <div className="empty-state" role="alert"><Info /><h3>We couldn’t load the catalog</h3><p>{error}</p><button className="button button-outline" onClick={() => setQuery(`${query} `)}>Try again</button></div> : loading ? <SkeletonGrid /> : filtered.length ? <div className="discover-grid">{filtered.map(item => <MediaCard item={item} saved={isSaved(saved, item)} toggleSaved={toggleSaved} key={`${item.media_type}-${item.id}`} />)}</div> : <div className="empty-state"><Search /><h3>No titles found in this frame.</h3><p>Try another title or loosen your filters.</p><button className="button button-outline" onClick={() => { setQuery(''); setSelectedGenre('All films'); setYear('Any year'); setLanguage('Any language') }}>Clear filters</button></div>}</div>
 }
 
@@ -189,24 +218,61 @@ function SkeletonGrid() { return <div className="discover-grid" aria-label="Load
 function SkeletonRow({ title }: { title: string }) { return <section className="movie-row" aria-label={`Loading ${title}`}><div className="row-heading"><h3>{title}</h3></div><SkeletonGrid /></section> }
 
 function MovieDetailsPage({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: Media) => void }) {
-  const { id } = useParams(); const numericId = Number(id); const fallback = movies.find(item => item.id === numericId); const [movie, setMovie] = useState<MovieDetails | null>(fallback ? { ...fallback, cast: [], recommendations: [] } : null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [showTrailer, setShowTrailer] = useState(false)
+  const { id } = useParams(); const numericId = Number(id); const fallback = movies.find(item => item.id === numericId); const [movie, setMovie] = useState<MovieDetails | null>(fallback ? { ...fallback, cast: [], recommendations: [] } : null); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
   usePageMeta(movie ? `${movie.title} — Movie Details | AAK Movies` : 'Movie details | AAK Movies', movie?.overview || 'Movie details and recommendations on AAK Movies.', 'video.movie')
-  useEffect(() => { let active = true; setLoading(true); setError(''); setShowTrailer(false); const local = movies.find(item => item.id === numericId); setMovie(local ? { ...local, cast: [], recommendations: [] } : null); if (!Number.isInteger(numericId) || numericId <= 0) { setError('This movie ID is invalid.'); setLoading(false); return } getMovieDetails(numericId).then(data => { if (active) setMovie(data) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Movie details unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [numericId])
+  useEffect(() => { let active = true; setLoading(true); setError(''); const local = movies.find(item => item.id === numericId); setMovie(local ? { ...local, cast: [], recommendations: [] } : null); if (!Number.isInteger(numericId) || numericId <= 0) { setError('This movie ID is invalid.'); setLoading(false); return } getMovieDetails(numericId).then(data => { if (active) setMovie(data) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Movie details unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [numericId])
   if (!movie && (loading || error)) return <PageState loading={loading} error={error} />
   if (!movie) return <PageState error="Movie not found." />
   const detailed = movie
   const year = mediaYear(movie)
-  return <><section className="detail-hero" style={{ backgroundImage: `linear-gradient(90deg,rgba(10,11,13,.92),rgba(10,11,13,.64) 46%,rgba(10,11,13,.2)),linear-gradient(0deg,var(--bg),transparent 55%),url('${movie.backdrop}')` }}><div className="detail-content"><Link to="/discover" className="back-link"><ArrowLeft size={14} /> Back to discover</Link><div className="section-kicker">AAK MOVIES FEATURE · MOVIE</div><h1>{movie.title}</h1><div className="hero-meta">{year && <span>{year}</span>}<i /><span>{movie.runtime ?? 'Runtime unavailable'}</span><i /><span>{movie.genre}</span>{movie.vote_average !== undefined && <><i /><span className="rated"><Star size={13} fill="currentColor" /> {movie.vote_average.toFixed(1)}</span></>}</div><p>{movie.overview || 'No synopsis is available from TMDB.'}</p><div className="hero-actions"><Link className="button button-primary" to={`/watch/movie/${movie.id}`}><Play size={17} fill="currentColor" /> Watch now</Link>{detailed.trailerKey && <button className="button button-quiet" onClick={() => setShowTrailer(!showTrailer)}><MonitorPlay size={17} /> {showTrailer ? 'Hide trailer' : 'Watch trailer'}</button>}<button className="button button-quiet" onClick={() => toggleSaved(movie)}>{isSaved(saved, movie) ? <Check size={17} /> : <Bookmark size={17} />}{isSaved(saved, movie) ? 'In your library' : 'Add to library'}</button></div></div><img className="detail-poster" src={movie.poster} alt={`${movie.title} poster`} /></section><div className="detail-body"><div className="detail-facts"><Fact label="RELEASED" value={year || 'Not listed'} /><Fact label="LANGUAGE" value={movie.language || 'Not listed'} /><Fact label="GENRE" value={movie.genre} />{movie.vote_average !== undefined && <Fact label="TMDB RATING" value={`${movie.vote_average.toFixed(1)} / 10`} />}</div>{showTrailer && detailed.trailerKey && <Trailer title={movie.title} videoKey={detailed.trailerKey} />}{detailed.cast.length > 0 && <CastList names={detailed.cast} />}<MediaRow title="Recommended movies" kicker="KEEP THE FEELING GOING" items={detailed.recommendations} saved={saved} toggleSaved={toggleSaved} /></div></>
+  return <><section className="detail-hero"><DetailTrailerBackdrop artwork={movie.backdrop} title={movie.title} videoKey={detailed.trailerKey} /><div className="detail-content"><Link to="/discover" className="back-link"><ArrowLeft size={14} /> Back to discover</Link><div className="section-kicker">AAK MOVIES FEATURE · MOVIE</div><h1>{movie.title}</h1><div className="hero-meta">{year && <span>{year}</span>}<i /><span>{movie.runtime ?? 'Runtime unavailable'}</span><i /><span>{movie.genre}</span>{movie.vote_average !== undefined && <><i /><span className="rated"><Star size={13} fill="currentColor" /> {movie.vote_average.toFixed(1)}</span></>}</div><p>{movie.overview || 'No synopsis is available from TMDB.'}</p><div className="hero-actions"><Link className="button button-primary" to={`/watch/movie/${movie.id}`}><Play size={17} fill="currentColor" /> Watch now</Link><button className="button button-quiet" onClick={() => toggleSaved(movie)}>{isSaved(saved, movie) ? <Check size={17} /> : <Bookmark size={17} />}{isSaved(saved, movie) ? 'In your library' : 'Add to library'}</button></div></div><img className="detail-poster" src={movie.poster} alt={`${movie.title} poster`} /></section><div className="detail-body"><div className="detail-facts"><Fact label="RELEASED" value={year || 'Not listed'} /><Fact label="LANGUAGE" value={movie.language || 'Not listed'} /><Fact label="GENRE" value={movie.genre} />{movie.vote_average !== undefined && <Fact label="TMDB RATING" value={`${movie.vote_average.toFixed(1)} / 10`} />}</div>{detailed.cast.length > 0 && <CastList members={detailed.cast} />}<MediaRow title="Recommended movies" kicker="KEEP THE FEELING GOING" items={detailed.recommendations} saved={saved} toggleSaved={toggleSaved} /></div></>
 }
 
 function TvDetailsPage({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: Media) => void }) {
-  const { id } = useParams(); const numericId = Number(id); const [show, setShow] = useState<TvDetails | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [showTrailer, setShowTrailer] = useState(false)
+  const { id } = useParams(); const numericId = Number(id); const location = useLocation(); const navigate = useNavigate(); const [show, setShow] = useState<TvDetails | null>(null); const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [episodes, setEpisodes] = useState<TvEpisode[]>([]); const [seasonLoading, setSeasonLoading] = useState(false); const [seasonError, setSeasonError] = useState(''); const [seasonNo, setSeasonNo] = useState<number | null>(null); const [episodeNo, setEpisodeNo] = useState<number | null>(null); const [player, setPlayer] = useState<'nxsha' | 'universal'>('nxsha'); const requestedEpisode = useRef<number | undefined>(undefined)
   usePageMeta(show ? `${show.title} — TV Series | AAK Movies` : 'TV Series Details | AAK Movies', show?.overview || 'TV series details, seasons, and episodes on AAK Movies.', 'video.tv_show')
-  useEffect(() => { let active = true; setLoading(true); setError(''); setShow(null); setShowTrailer(false); if (!Number.isInteger(numericId) || numericId <= 0) { setError('This series ID is invalid.'); setLoading(false); return } getTvDetails(numericId).then(data => { if (active) setShow(data) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Series details unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [numericId])
+  useEffect(() => { let active = true; setLoading(true); setError(''); setShow(null); setEpisodes([]); setSeasonNo(null); setEpisodeNo(null); if (!Number.isInteger(numericId) || numericId <= 0) { setError('This series ID is invalid.'); setLoading(false); return } getTvDetails(numericId).then(data => { if (active) setShow(data) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Series details unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [numericId])
+  const availableSeasons = show?.seasons.filter(season => season.season_number >= 0) ?? []
+  const selectedSeason = availableSeasons.find(season => season.season_number === seasonNo) ?? availableSeasons[0]
+  useEffect(() => {
+    if (!show) return
+    const params = new URLSearchParams(location.search)
+    const requestedSeason = Number(params.get('season'))
+    const chosenSeason = availableSeasons.some(season => season.season_number === requestedSeason) ? requestedSeason : availableSeasons[0]?.season_number
+    const parsedEpisode = Number(params.get('episode'))
+    requestedEpisode.current = Number.isSafeInteger(parsedEpisode) && parsedEpisode > 0 ? parsedEpisode : undefined
+    setSeasonNo(chosenSeason ?? null)
+    setEpisodeNo(requestedEpisode.current ?? null)
+  }, [show, location.search])
+  useEffect(() => {
+    if (!show || !selectedSeason) { setEpisodes([]); return }
+    let active = true
+    setSeasonLoading(true); setSeasonError(''); setEpisodes([])
+    getTvSeason(show.id, selectedSeason.season_number).then(items => {
+      if (!active) return
+      setEpisodes(items)
+      const requested = requestedEpisode.current
+      const chosen = items.find(item => item.episode_number === requested)?.episode_number ?? items[0]?.episode_number ?? null
+      setEpisodeNo(chosen)
+      if (chosen !== null && chosen !== requested) {
+        const params = new URLSearchParams(location.search); params.set('season', String(selectedSeason.season_number)); params.set('episode', String(chosen))
+        navigate(`/tv/${show.id}?${params.toString()}`, { replace: true })
+      }
+    }).catch(cause => { if (active) setSeasonError(cause instanceof Error ? cause.message : 'Could not load this season.') }).finally(() => { if (active) setSeasonLoading(false) })
+    return () => { active = false }
+  }, [show?.id, selectedSeason?.season_number])
   if (!show && (loading || error)) return <PageState loading={loading} error={error} />
   if (!show) return <PageState error="Series not found." />
   const year = mediaYear(show)
-  return <><section className="detail-hero" style={{ backgroundImage: `linear-gradient(90deg,rgba(10,11,13,.92),rgba(10,11,13,.64) 46%,rgba(10,11,13,.2)),linear-gradient(0deg,var(--bg),transparent 55%),url('${show.backdrop}')` }}><div className="detail-content"><Link to="/discover?media=tv" className="back-link"><ArrowLeft size={14} /> Back to TV shows</Link><div className="section-kicker">AAK MOVIES FEATURE · TV SERIES</div><h1>{show.title}</h1><div className="hero-meta">{year && <span>{year}</span>}<i /><span>{show.number_of_seasons === undefined ? 'Seasons unavailable' : `${show.number_of_seasons} ${show.number_of_seasons === 1 ? 'season' : 'seasons'}`}</span><i /><span>{show.number_of_episodes === undefined ? 'Episodes unavailable' : `${show.number_of_episodes} episodes`}</span>{show.vote_average !== undefined && <><i /><span className="rated"><Star size={13} fill="currentColor" /> {show.vote_average.toFixed(1)}</span></>}</div><p>{show.overview || 'No synopsis is available from TMDB.'}</p><div className="hero-actions">{show.seasons.filter(season => season.season_number >= 0).map(season => <Link className="button button-primary" to={`/tv/${show.id}/season/${season.season_number}`} key={season.id}>Season {season.season_number} <ArrowRight size={14} /></Link>).slice(0, 2)}<button className="button button-quiet" onClick={() => toggleSaved(show)}>{isSaved(saved, show) ? <Check size={17} /> : <Bookmark size={17} />}{isSaved(saved, show) ? 'In your library' : 'Add to library'}</button>{show.trailerKey && <button className="button button-quiet" onClick={() => setShowTrailer(!showTrailer)}><MonitorPlay size={17} /> {showTrailer ? 'Hide trailer' : 'Watch trailer'}</button>}</div></div><img className="detail-poster" src={show.poster} alt={`${show.title} poster`} /></section><div className="detail-body"><div className="detail-facts"><Fact label="FIRST AIRED" value={year || 'Not listed'} /><Fact label="SEASONS" value={show.number_of_seasons?.toString() ?? 'Not listed'} /><Fact label="EPISODES" value={show.number_of_episodes?.toString() ?? 'Not listed'} /><Fact label="GENRE" value={show.genre} /></div>{showTrailer && show.trailerKey && <Trailer title={show.title} videoKey={show.trailerKey} />}{show.cast.length > 0 && <CastList names={show.cast} />}<div className="season-list"><div className="section-kicker">EPISODE GUIDE</div><h3>Select a season</h3><div className="season-grid">{show.seasons.filter(season => season.season_number >= 0).map(season => <Link className="season-card" to={`/tv/${show.id}/season/${season.season_number}`} key={season.id}><strong>{season.name || `Season ${season.season_number}`}</strong><span>{season.episode_count} episodes</span>{season.air_date && <small>{season.air_date.slice(0, 4)}</small>}</Link>)}</div></div><MediaRow title="Recommended TV series" kicker="MORE SERIES TO DISCOVER" items={show.recommendations} saved={saved} toggleSaved={toggleSaved} /></div></>
+  const episode = episodes.find(item => item.episode_number === episodeNo && item.season_number === selectedSeason?.season_number)
+  const episodeIndex = episode ? episodes.findIndex(item => item.id === episode.id) : -1
+  const previous = episodeIndex > 0 ? episodes[episodeIndex - 1] : undefined
+  const next = episodeIndex >= 0 && episodeIndex < episodes.length - 1 ? episodes[episodeIndex + 1] : undefined
+  const selectEpisode = (number: number) => { setEpisodeNo(number); requestedEpisode.current = number; const params = new URLSearchParams(location.search); if (selectedSeason) params.set('season', String(selectedSeason.season_number)); params.set('episode', String(number)); navigate(`/tv/${show.id}?${params.toString()}`) }
+  const selectSeason = (number: number) => { setSeasonNo(number); setEpisodeNo(null); requestedEpisode.current = undefined; navigate(`/tv/${show.id}?season=${number}`) }
+  const target: PlaybackTarget | null = episode && selectedSeason ? { media_type: 'tv', id: show.id, season_number: selectedSeason.season_number, episode_number: episode.episode_number } : null
+  const nxshaUrl = target ? getExternalPlayerUrl(nxshaPlaybackSource, target) : null
+  return <><section className="detail-hero"><DetailTrailerBackdrop artwork={show.backdrop} title={show.title} videoKey={show.trailerKey} /><div className="detail-content"><Link to="/discover?media=tv" className="back-link"><ArrowLeft size={14} /> Back to TV shows</Link><div className="section-kicker">AAK MOVIES FEATURE · TV SERIES</div><h1>{show.title}</h1><div className="hero-meta">{year && <span>{year}</span>}<i /><span>{show.number_of_seasons === undefined ? 'Seasons unavailable' : `${show.number_of_seasons} ${show.number_of_seasons === 1 ? 'season' : 'seasons'}`}</span><i /><span>{show.number_of_episodes === undefined ? 'Episodes unavailable' : `${show.number_of_episodes} episodes`}</span>{show.vote_average !== undefined && <><i /><span className="rated"><Star size={13} fill="currentColor" /> {show.vote_average.toFixed(1)}</span></>}</div><p>{show.overview || 'No synopsis is available from TMDB.'}</p><div className="hero-actions"><button className="button button-quiet" onClick={() => toggleSaved(show)}>{isSaved(saved, show) ? <Check size={17} /> : <Bookmark size={17} />}{isSaved(saved, show) ? 'In your library' : 'Add to library'}</button></div></div><img className="detail-poster" src={show.poster} alt={`${show.title} poster`} /></section><div className="detail-body"><div className="detail-facts"><Fact label="FIRST AIRED" value={year || 'Not listed'} /><Fact label="SEASONS" value={show.number_of_seasons?.toString() ?? 'Not listed'} /><Fact label="EPISODES" value={show.number_of_episodes?.toString() ?? 'Not listed'} /><Fact label="GENRE" value={show.genre} /></div>{show.cast.length > 0 && <CastList members={show.cast} />}<section className="season-list inline-episode-guide"><div className="section-kicker">EPISODE GUIDE</div><h3>Choose a season and episode</h3><label className="inline-season-select">Season<select value={selectedSeason?.season_number ?? ''} onChange={event => selectSeason(Number(event.target.value))} aria-label="Choose a season" disabled={!availableSeasons.length}>{availableSeasons.map(season => <option key={season.id} value={season.season_number}>{season.name || `Season ${season.season_number}`}</option>)}</select></label>{seasonError && <p className="form-error" role="alert">{seasonError}</p>}{seasonLoading ? <p className="season-status" role="status">Loading episodes…</p> : episodes.length ? <div className="inline-episode-layout"><div className="episode-list" aria-label="Episodes">{episodes.map(item => <button className={`inline-episode-card ${episode?.id === item.id ? 'selected' : ''}`} key={item.id} type="button" aria-pressed={episode?.id === item.id} onClick={() => selectEpisode(item.episode_number)}><span className="episode-number">{String(item.episode_number).padStart(2, '0')}</span><span className="episode-copy"><strong>{item.name || `Episode ${item.episode_number}`}</strong><small>{item.air_date || 'Air date not listed'}{item.runtime ? ` · ${item.runtime} min` : ''}</small></span><Play size={15} aria-hidden="true" /></button>)}</div><div className="inline-tv-playback">{episode && <div className="selected-episode"><div className="section-kicker">SEASON {episode.season_number} · EPISODE {episode.episode_number}</div><h4>{episode.name || `Episode ${episode.episode_number}`}</h4><p>{episode.overview || 'No episode synopsis is available from TMDB.'}</p></div>}<PlayerChoices selected={player} onChange={setPlayer} />{player === 'nxsha' && nxshaUrl ? <ExternalIframePlayer key={nxshaUrl} title={`Default player for ${show.title}, season ${selectedSeason?.season_number}, episode ${episode?.episode_number}`} src={nxshaUrl} /> : player === 'universal' && episode && selectedSeason ? <UniversalPlayerPanel contextLabel={`${show.title} S${selectedSeason.season_number}E${episode.episode_number}`} mediaContext={{ media_type: 'tv', tmdbId: show.id, title: show.title, seasonNumber: selectedSeason.season_number, episodeNumber: episode.episode_number }} /> : <p className="season-status" role="status">Choose an episode to view playback options.</p>}<nav className="episode-neighbors" aria-label="Episode navigation">{previous ? <button className="button button-outline" type="button" onClick={() => selectEpisode(previous.episode_number)}><ArrowLeft size={14} /> Previous · E{previous.episode_number}</button> : <span />}{next ? <button className="button button-outline" type="button" onClick={() => selectEpisode(next.episode_number)}>Next · E{next.episode_number} <ArrowRight size={14} /></button> : <span />}</nav></div></div> : !seasonError && <p className="season-status" role="status">TMDB has not listed episodes for this season.</p>}</section><MediaRow title="Recommended TV series" kicker="MORE SERIES TO DISCOVER" items={show.recommendations} saved={saved} toggleSaved={toggleSaved} /></div></>
 }
 
 function TvSeasonPage() {
@@ -232,7 +298,7 @@ function TvSeasonPage() {
   if (loading) return <PageState loading />
   if (error) return <PageState error={error} onRetry={() => setAttempt(value => value + 1)} />
   if (!show) return <PageState error="Series not found." onRetry={() => setAttempt(value => value + 1)} />
-  return <div className="page-wrap episode-page"><Link to={`/tv/${show.id}`} className="back-link"><ArrowLeft size={14} /> Back to {show.title}</Link><div className="page-intro"><div className="section-kicker">TV SERIES · EPISODE GUIDE</div><h1>{show.title}<br /><em>Season {seasonNo}</em></h1><p>{episodes.length} episodes listed by TMDB.</p></div><div className="episode-list">{episodes.length ? episodes.map(episode => <article className="episode-card" key={episode.id}><div className="episode-still">{episode.still_path && <img src={`https://image.tmdb.org/t/p/w300${episode.still_path}`} alt={`${episode.name || `Episode ${episode.episode_number}`} still`} loading="lazy" onError={event => { event.currentTarget.style.display = 'none' }} />}</div><div className="episode-number">{String(episode.episode_number).padStart(2, '0')}</div><div className="episode-copy"><h3>{episode.name || `Episode ${episode.episode_number}`}</h3><p>{episode.overview || 'No episode synopsis is available.'}</p><small>{episode.air_date || 'Air date not listed'}{episode.runtime ? ` · ${episode.runtime} min` : ''}</small></div><Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${episode.episode_number}`} aria-label={`Watch ${episode.name || `episode ${episode.episode_number}`} playback options`}><Play size={14} /> Watch</Link></article>) : <div className="empty-state"><Info /><h3>No episode information listed.</h3><p>TMDB has not provided episodes for this season.</p></div>}</div></div>
+  return <div className="page-wrap episode-page"><Link to={`/tv/${show.id}`} className="back-link"><ArrowLeft size={14} /> Back to {show.title}</Link><div className="page-intro"><div className="section-kicker">TV SERIES · EPISODE GUIDE</div><h1>{show.title}<br /><em>Season {seasonNo}</em></h1><p>{episodes.length} episodes listed by TMDB.</p></div><div className="episode-list">{episodes.length ? episodes.map(episode => <article className="episode-card" key={episode.id}><div className="episode-still">{episode.still_path && <img src={`https://image.tmdb.org/t/p/w300${episode.still_path}`} alt={`${episode.name || `Episode ${episode.episode_number}`} still`} loading="lazy" onError={event => { event.currentTarget.style.display = 'none' }} />}</div><div className="episode-number">{String(episode.episode_number).padStart(2, '0')}</div><div className="episode-copy"><h3>{episode.name || `Episode ${episode.episode_number}`}</h3><p>{episode.overview || 'No episode synopsis is available.'}</p><small>{episode.air_date || 'Air date not listed'}{episode.runtime ? ` · ${episode.runtime} min` : ''}</small></div><Link className="button button-outline" to={`/tv/${show.id}?season=${seasonNo}&episode=${episode.episode_number}`} aria-label={`Select ${episode.name || `episode ${episode.episode_number}`} on the series page`}><Play size={14} /> Select episode</Link></article>) : <div className="empty-state"><Info /><h3>No episode information listed.</h3><p>TMDB has not provided episodes for this season.</p></div>}</div></div>
 }
 
 function MovieWatchPage() {
@@ -245,7 +311,7 @@ function MovieWatchPage() {
   const [player, setPlayer] = useState<'nxsha' | 'universal'>('nxsha')
   const target: PlaybackTarget | null = movie ? { media_type: 'movie', id: movie.id } : null
   const url = target ? getExternalPlayerUrl(nxshaPlaybackSource, target) : null
-  usePageMeta(movie ? `Watch ${movie.title} | AAK Movies` : 'Movie player | AAK Movies', 'Movie playback choices on AAK Movies. External provider playback is unverified.')
+  usePageMeta(movie ? `Watch ${movie.title} | AAK Movies` : 'Movie player | AAK Movies', 'Movie playback choices on AAK Movies.')
   useEffect(() => {
     let active = true
     setLoading(true); setError(''); setPlayer('nxsha')
@@ -260,12 +326,10 @@ function MovieWatchPage() {
 
 function PlayerChoices({ selected, onChange }: { selected: 'nxsha' | 'universal'; onChange: (value: 'nxsha' | 'universal') => void }) {
   return <div className="player-choices" role="group" aria-label="Choose a player">
-    <button className={selected === 'nxsha' ? 'selected' : ''} aria-pressed={selected === 'nxsha'} onClick={() => onChange('nxsha')}><MonitorPlay size={16} /><span>Nxsha Player</span><small>Default</small></button>
-    <button className={selected === 'universal' ? 'selected' : ''} aria-pressed={selected === 'universal'} onClick={() => onChange('universal')}><FileVideo2Icon /><span>Universal Player</span><small>Direct Video + Built-in Sources</small></button>
+    <button type="button" className={selected === 'nxsha' ? 'selected' : ''} aria-pressed={selected === 'nxsha'} onClick={() => onChange('nxsha')}><MonitorPlay size={17} /><span>Default</span><small>Nxsha</small></button>
+    <button type="button" className={selected === 'universal' ? 'selected' : ''} aria-pressed={selected === 'universal'} onClick={() => onChange('universal')}><Magnet size={17} /><span>Torrent</span><small>Addon sources</small></button>
   </div>
 }
-
-function FileVideo2Icon() { return <span className="file-video-icon" aria-hidden="true">MP4</span> }
 
 function ExternalIframePlayer({ src, title }: { src: string; title: string }) {
   const [frameLoaded, setFrameLoaded] = useState(false)
@@ -289,68 +353,13 @@ function ExternalIframePlayer({ src, title }: { src: string; title: string }) {
   </section>
 }
 
-function EpisodeWatchPage() {
+function LegacyEpisodeRedirect() {
   const { id, seasonNumber, episodeNumber } = useParams()
-  const navigate = useNavigate()
   const showId = Number(id)
-  const seasonNo = Number(seasonNumber)
-  const episodeNo = Number(episodeNumber)
-  const [show, setShow] = useState<TvDetails | null>(null)
-  const [episodes, setEpisodes] = useState<TvEpisode[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [attempt, setAttempt] = useState(0)
-  const [player, setPlayer] = useState<'nxsha' | 'universal'>('nxsha')
-  const [seasonSwitching, setSeasonSwitching] = useState(false)
-  const [seasonError, setSeasonError] = useState('')
-  const target: PlaybackTarget | null = Number.isSafeInteger(showId) && showId > 0 && Number.isSafeInteger(seasonNo) && seasonNo >= 0 && Number.isSafeInteger(episodeNo) && episodeNo > 0
-    ? { media_type: 'tv', id: showId, season_number: seasonNo, episode_number: episodeNo } : null
-  const url = target ? getExternalPlayerUrl(nxshaPlaybackSource, target) : null
-  const episode = episodes.find(item => item.episode_number === episodeNo && item.season_number === seasonNo)
-  usePageMeta(show && episode ? `${show.title} S${seasonNo}E${episodeNo} — Watch episode | AAK Movies` : 'TV Episode Player | AAK Movies', episode?.overview || 'TV episode playback choices and episode information.')
-  useEffect(() => {
-    let active = true
-    setLoading(true); setError(''); setSeasonError(''); setPlayer('nxsha')
-    if (!Number.isSafeInteger(showId) || showId <= 0 || !Number.isSafeInteger(seasonNo) || seasonNo < 0 || !Number.isSafeInteger(episodeNo) || episodeNo <= 0) {
-      setError('This TV show, season, or episode number is invalid.'); setLoading(false)
-      return () => { active = false }
-    }
-    Promise.all([getTvDetails(showId), getTvSeason(showId, seasonNo)]).then(([series, items]) => { if (active) { setShow(series); setEpisodes(items) } }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Episode information is unavailable.') }).finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
-  }, [showId, seasonNo, episodeNo, attempt])
-  const changeSeason = async (value: string) => {
-    const nextSeason = Number(value)
-    if (!Number.isSafeInteger(nextSeason) || nextSeason < 0) return
-    setSeasonSwitching(true); setSeasonError('')
-    try {
-      const nextEpisodes = await getTvSeason(showId, nextSeason)
-      if (!nextEpisodes.length) throw new Error('TMDB has not listed episodes for this season.')
-      navigate(`/watch/tv/${showId}/${nextSeason}/${nextEpisodes[0].episode_number}`)
-    } catch (cause) { setSeasonError(cause instanceof Error ? cause.message : 'Could not load that season.') }
-    finally { setSeasonSwitching(false) }
-  }
-  if (loading) return <PageState loading />
-  if (error) return <PageState error={error} onRetry={() => setAttempt(value => value + 1)} />
-  if (!show || !episode || !url) return <PageState error="TMDB did not return this episode for the selected season." onRetry={() => setAttempt(value => value + 1)} />
-  const episodeIndex = episodes.findIndex(item => item.episode_number === episodeNo)
-  const previous = episodeIndex > 0 ? episodes[episodeIndex - 1] : undefined
-  const next = episodeIndex >= 0 && episodeIndex < episodes.length - 1 ? episodes[episodeIndex + 1] : undefined
-  const seasons = show.seasons.filter(item => item.season_number >= 0)
-  return <div className="watch-page episode-watch-page">
-    <div className="watch-top"><Link to={`/tv/${show.id}/season/${seasonNo}`} className="back-link"><ArrowLeft size={14} /> Back to season</Link><span className="watch-title">TV EPISODE <i /> {show.title}</span></div>
-    <div className="episode-watch-heading"><div className="section-kicker">{show.title} · SEASON {seasonNo} · EPISODE {episodeNo}</div><h1>{episode.name || `Episode ${episodeNo}`}</h1><p>{episode.overview || 'No episode synopsis is available from TMDB.'}</p>{episode.air_date && <small>First aired {episode.air_date}{episode.runtime ? ` · ${episode.runtime} min` : ''}</small>}</div>
-    <div className="episode-selectors"><label>Season<select value={seasonNo} onChange={event => void changeSeason(event.target.value)} disabled={seasonSwitching} aria-label="Choose TV season">{seasons.map(item => <option value={item.season_number} key={item.id}>{item.name || `Season ${item.season_number}`}</option>)}</select></label><label>Episode<select value={episodeNo} onChange={event => navigate(`/watch/tv/${show.id}/${seasonNo}/${Number(event.target.value)}`)} aria-label="Choose TV episode">{episodes.map(item => <option value={item.episode_number} key={item.id}>{String(item.episode_number).padStart(2, '0')} · {item.name || `Episode ${item.episode_number}`}</option>)}</select></label>{seasonSwitching && <span role="status">Loading season…</span>}</div>
-    {seasonError && <p role="alert" className="form-error">{seasonError}</p>}
-    <PlayerChoices selected={player} onChange={setPlayer} />
-    <div className="watch-player-content">{player === 'nxsha' ? <ExternalIframePlayer key={url} title={`${nxshaPlaybackSource.name} player for ${show.title}, season ${seasonNo}, episode ${episodeNo}`} src={url} /> : <UniversalPlayerPanel contextLabel={`${show.title} S${seasonNo}E${episodeNo}`} mediaContext={{ media_type: 'tv', tmdbId: show.id, title: show.title, seasonNumber: seasonNo, episodeNumber: episodeNo }} />}</div>
-    <nav className="episode-neighbors" aria-label="Episode navigation">{previous ? <Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${previous.episode_number}`}><ArrowLeft size={14} /> Previous · E{previous.episode_number}</Link> : <span />}{next ? <Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${next.episode_number}`}>Next · E{next.episode_number} <ArrowRight size={14} /></Link> : <span />}</nav>
-    <div className="watch-information"><div><div className="section-kicker">TV SERIES</div><h1>{show.title}</h1><p>Season {seasonNo} <i /> Episode {episodeNo}</p></div><Link className="button button-quiet" to={`/tv/${show.id}`}>Series details <ArrowRight size={15} /></Link></div>
-  </div>
-}
-
-function DirectPlayer() {
-  usePageMeta('Universal Video Player | AAK Movies', 'Play an authorized direct HTTPS MP4, WebM, or Ogg video and inspect registered manifest metadata.')
-  return <div className="page-wrap direct-player-page"><div className="page-intro"><div className="section-kicker">UNIVERSAL PLAYER</div><h1>Bring your <em>own video.</em></h1><p>Play a direct, authorized video file or inspect the built-in source declarations.</p></div><UniversalPlayerPanel /></div>
+  const season = Number(seasonNumber)
+  const episode = Number(episodeNumber)
+  if (!Number.isSafeInteger(showId) || showId <= 0 || !Number.isSafeInteger(season) || season < 0 || !Number.isSafeInteger(episode) || episode <= 0) return <Navigate replace to="/discover?media=tv" />
+  return <Navigate replace to={`/tv/${showId}?season=${season}&episode=${episode}`} />
 }
 
 type ManifestRecord = { url: string; name: string; id: string; resources: string[]; types: string[] }
@@ -390,8 +399,46 @@ function LibraryPage({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (ite
 function Profile() { usePageMeta('Profile & Preferences | AAK Movies', 'Profile and viewing preferences for AAK Movies.'); return <div className="page-wrap profile-page"><div className="page-intro"><div className="section-kicker">YOUR AAK MOVIES</div><h1>Make it <em>yours.</em></h1><p>A personal space for saved films and viewing settings.</p></div><div className="profile-panel"><div className="profile-heading"><div className="profile-avatar">A</div><div><h2>Welcome to AAK Movies</h2><p>Account sign-in is not connected in this demo.</p></div></div><div className="panel-divider" /><div className="settings-list"><div><div className="setting-icon"><Heart size={17} /></div><div><strong>Personal recommendations</strong><p>Available when account support is connected.</p></div></div><div><div className="setting-icon"><Settings size={17} /></div><div><strong>Viewing preferences</strong><p>Language and subtitle preferences are not stored yet.</p></div></div><div><div className="setting-icon"><ShieldCheck size={17} /></div><div><strong>Privacy & data</strong><p>Understand how your data is handled.</p></div><Link to="/privacy" className="subtle-link">Read policy <ArrowRight size={13} /></Link></div></div></div></div> }
 function Admin() { usePageMeta('Admin Dashboard | AAK Movies', 'Administration shell for AAK Movies. Protected server-side admin access is not configured.'); return <div className="page-wrap admin-page"><div className="page-intro"><div className="section-kicker"><ShieldCheck size={13} /> ADMINISTRATION</div><h1>Curate with <em>care.</em></h1><p>Manage permitted metadata and provider references.</p></div><div className="admin-alert"><LockKeyhole size={18} /><div><strong>Admin access is not configured.</strong><p>This is a dashboard shell. Add server-verified roles before enabling writes.</p></div></div><div className="admin-table"><div className="table-heading"><div><div className="section-kicker">CONTENT MANAGEMENT</div><h3>Playback source registry</h3></div><Link to="/sources" className="button button-outline">Open manifest registry</Link></div><p className="admin-footnote">Nxsha has explicit movie and TV episode URL mappings. Provider permission, supported IDs, and playback remain unverified.</p></div></div> }
 
-function Trailer({ title, videoKey }: { title: string; videoKey: string }) { return <div className="trailer-frame"><iframe title={`${title} trailer`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoKey)}`} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> }
-function CastList({ names }: { names: string[] }) { return <section className="cast-section"><div className="section-kicker">THE PEOPLE IN THE STORY</div><h3>Cast</h3><div className="cast-list">{names.map((name, index) => <div className="cast-person" key={`${name}-${index}`}><span>{name.slice(0, 1)}</span><strong>{name}</strong></div>)}</div></section> }
+function DetailTrailerBackdrop({ artwork, title, videoKey }: { artwork: string; title: string; videoKey?: string }) {
+  const frame = useRef<HTMLIFrameElement>(null)
+  const root = useRef<HTMLDivElement>(null)
+  const [inView, setInView] = useState(true)
+  const [pageVisible, setPageVisible] = useState(!document.hidden)
+  const [motionAllowed, setMotionAllowed] = useState(true)
+  const [active, setActive] = useState(false)
+  const [muted, setMuted] = useState(true)
+  const [frameFailed, setFrameFailed] = useState(false)
+  const [frameReady, setFrameReady] = useState(false)
+  useEffect(() => {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const updateMotion = () => setMotionAllowed(!motion.matches)
+    const updatePage = () => setPageVisible(!document.hidden)
+    updateMotion(); motion.addEventListener('change', updateMotion)
+    document.addEventListener('visibilitychange', updatePage)
+    const node = root.current
+    const observer = node && 'IntersectionObserver' in window ? new IntersectionObserver(entries => setInView(entries[0]?.isIntersecting ?? true), { threshold: 0.15 }) : null
+    if (node && observer) observer.observe(node)
+    return () => { motion.removeEventListener('change', updateMotion); document.removeEventListener('visibilitychange', updatePage); observer?.disconnect() }
+  }, [])
+  useEffect(() => {
+    setActive(false); setMuted(true); setFrameFailed(false); setFrameReady(false)
+    if (!videoKey || !motionAllowed || !inView || !pageVisible) return
+    const timer = window.setTimeout(() => setActive(true), 2000)
+    return () => window.clearTimeout(timer)
+  }, [videoKey, motionAllowed, inView, pageVisible])
+  const toggleMute = () => {
+    const next = !muted
+    setMuted(next)
+    frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: next ? 'mute' : 'unMute', args: [] }), 'https://www.youtube-nocookie.com')
+  }
+  return <div ref={root} className={`detail-trailer-backdrop ${active && !frameFailed ? 'is-playing' : ''} ${frameReady ? 'is-ready' : ''}`} aria-hidden="false">
+    <div className="detail-backdrop-art" style={{ backgroundImage: `url('${artwork}')` }} aria-hidden="true" />
+    {active && videoKey && !frameFailed && <iframe ref={frame} title={`${title} trailer background`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoKey)}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&loop=1&playlist=${encodeURIComponent(videoKey)}&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`} allow="autoplay; encrypted-media; picture-in-picture" tabIndex={-1} onLoad={() => setFrameReady(true)} onError={() => setFrameFailed(true)} />}
+    <div className="detail-backdrop-scrim" aria-hidden="true" />
+    {videoKey && motionAllowed && <button className="detail-trailer-mute" type="button" aria-label={muted ? 'Unmute trailer background' : 'Mute trailer background'} onClick={toggleMute}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}<span>{muted ? 'Muted' : 'Sound on'}</span></button>}
+  </div>
+}
+function CastList({ members }: { members: CastMember[] }) { return <section className="cast-section"><div className="section-kicker">THE PEOPLE IN THE STORY</div><h3>Cast</h3><div className="cast-list">{members.map(member => <article className="cast-person" key={member.id}><div className="cast-photo">{member.profilePath ? <img src={`https://image.tmdb.org/t/p/w185${member.profilePath}`} alt={`${member.name}`} width="92" height="138" loading="lazy" onError={event => { event.currentTarget.hidden = true; event.currentTarget.parentElement?.classList.add('no-cast-photo') }} /> : <span aria-hidden="true">{member.name.slice(0, 1)}</span>}</div><strong>{member.name}</strong>{member.character && <small>{member.character}</small>}</article>)}</div></section> }
 function Fact({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
 function PageState({ loading = false, error, onRetry }: { loading?: boolean; error?: string; onRetry?: () => void }) { return <div className="page-wrap"><div className="empty-state" role={error ? 'alert' : 'status'}>{loading ? <div className="loading-spinner" aria-label="Loading" /> : <Info />}<h3>{loading ? 'Loading title details…' : 'We couldn’t load this title.'}</h3>{error && <p>{error}</p>}{onRetry && <button className="button button-primary" onClick={onRetry}>Try again</button>}<Link className="button button-outline" to="/discover">Back to discover</Link></div></div> }
 function InfoPage({ title, kicker, text }: { title: string; kicker: string; text: string }) { usePageMeta(`${kicker} | AAK Movies`, text); return <div className="info-page"><div className="info-symbol"><Clapperboard /></div><div className="section-kicker">{kicker}</div><h1>{title}</h1><p>{text}</p><Link to="/discover" className="button button-outline">Explore movies & series <ArrowRight size={15} /></Link></div> }

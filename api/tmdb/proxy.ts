@@ -1,5 +1,5 @@
-const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|genre\/(?:movie|tv)\/list|movie\/\d+(?:\/external_ids)?|tv\/\d+(?:\/external_ids|\/season\/\d+)?)$/
-const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'with_original_language'])
+const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|discover\/tv|genre\/(?:movie|tv)\/list|movie\/\d+(?:\/external_ids)?|tv\/\d+(?:\/external_ids|\/season\/\d+)?)$/
+const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'with_original_language', 'with_genres', 'sort_by'])
 
 type VercelRequest = { method?: string; url?: string }
 type VercelResponse = { statusCode: number; setHeader: (name: string, value: string) => void; end: (body?: string | Uint8Array) => void }

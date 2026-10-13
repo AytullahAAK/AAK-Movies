@@ -20,8 +20,9 @@ export type Movie = Media & { media_type: 'movie'; release_date?: string }
 export type TvShow = Media & { media_type: 'tv'; first_air_date?: string; number_of_seasons?: number; number_of_episodes?: number }
 export type TvSeason = { id: number; name: string; season_number: number; episode_count: number; overview: string; poster_path: string | null; air_date: string | null }
 export type TvEpisode = { id: number; name: string; episode_number: number; season_number: number; overview: string; still_path: string | null; air_date: string | null; runtime: number | null }
-export type MovieDetails = Movie & { runtimeMinutes?: number; cast: string[]; trailerKey?: string; recommendations: Movie[] }
-export type TvDetails = TvShow & { seasons: TvSeason[]; cast: string[]; trailerKey?: string; recommendations: TvShow[] }
+export type CastMember = { id: number; name: string; character: string; profilePath: string | null }
+export type MovieDetails = Movie & { runtimeMinutes?: number; cast: CastMember[]; trailerKey?: string; recommendations: Movie[] }
+export type TvDetails = TvShow & { seasons: TvSeason[]; cast: CastMember[]; trailerKey?: string; recommendations: TvShow[] }
 
 const photos = {
   dune: 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1800&q=85',
@@ -146,20 +147,29 @@ export async function searchCatalog(query: string, type: 'movie' | 'tv' | 'all')
   const [data, movieGenres, tvGenres] = await Promise.all([tmdb<{ results: TmdbItem[] }>('/search/multi', { query, include_adult: 'false' }), getGenreNames('movie'), getGenreNames('tv')])
   return data.results.map(item => item.media_type === 'movie' ? normalizeMovie(item, movieGenres) : item.media_type === 'tv' ? normalizeTv(item, tvGenres) : null).filter((item): item is Media => item !== null)
 }
+let animeCatalogCache: Promise<TvShow[]> | undefined
+export function animeTvCatalog(): Promise<TvShow[]> {
+  if (useLocalDemoCatalog) return Promise.resolve([])
+  if (!animeCatalogCache) animeCatalogCache = Promise.all([
+    tmdb<{ results: TmdbItem[] }>('/discover/tv', { with_genres: '16', with_original_language: 'ja', sort_by: 'popularity.desc', include_adult: 'false' }),
+    getGenreNames('tv'),
+  ]).then(([data, names]) => data.results.map(item => normalizeTv(item, names))).catch(cause => { animeCatalogCache = undefined; throw cause })
+  return animeCatalogCache
+}
 export async function getMovieDetails(id: number): Promise<MovieDetails> {
   if (useLocalDemoCatalog) {
     const demo = movies.find(item => item.id === id)
     if (!demo) throw new Error('Configure local TMDB credentials to load other movie details.')
     return { ...demo, cast: [], recommendations: movies.filter(item => item.id !== id).slice(0, 5) }
   }
-  const data = await tmdb<TmdbItem & { credits?: { cast?: { name: string }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/movie/' + id, { append_to_response: 'videos,credits,recommendations' })
+  const data = await tmdb<TmdbItem & { credits?: { cast?: { id: number; name: string; character?: string; profile_path?: string | null }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/movie/' + id, { append_to_response: 'videos,credits,recommendations' })
   const videos = data.videos?.results ?? []
-  return { ...normalizeMovie(data), runtimeMinutes: data.runtime, cast: (data.credits?.cast ?? []).slice(0, 10).map(person => person.name), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeMovie(item)) }
+  return { ...normalizeMovie(data), runtimeMinutes: data.runtime, cast: (data.credits?.cast ?? []).slice(0, 12).map(person => ({ id: person.id, name: person.name, character: person.character ?? '', profilePath: person.profile_path ?? null })), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeMovie(item)) }
 }
 export async function getTvDetails(id: number): Promise<TvDetails> {
-  const data = await tmdb<TmdbItem & { seasons?: TvSeason[]; credits?: { cast?: { name: string }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/tv/' + id, { append_to_response: 'videos,credits,recommendations' })
+  const data = await tmdb<TmdbItem & { seasons?: TvSeason[]; credits?: { cast?: { id: number; name: string; character?: string; profile_path?: string | null }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/tv/' + id, { append_to_response: 'videos,credits,recommendations' })
   const videos = data.videos?.results ?? []
-  return { ...normalizeTv(data), seasons: data.seasons ?? [], cast: (data.credits?.cast ?? []).slice(0, 10).map(person => person.name), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeTv(item)) }
+  return { ...normalizeTv(data), seasons: data.seasons ?? [], cast: (data.credits?.cast ?? []).slice(0, 12).map(person => ({ id: person.id, name: person.name, character: person.character ?? '', profilePath: person.profile_path ?? null })), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeTv(item)) }
 }
 export async function getTvSeason(id: number, season: number): Promise<TvEpisode[]> {
   const data = await tmdb<{ episodes?: TvEpisode[] }>(`/tv/${id}/season/${season}`)
