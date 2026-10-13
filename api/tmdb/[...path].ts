@@ -1,4 +1,4 @@
-const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|genre\/(?:movie|tv)\/list|movie\/\d+|tv\/\d+(?:\/season\/\d+)?)$/
+const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|genre\/(?:movie|tv)\/list|movie\/\d+(?:\/external_ids)?|tv\/\d+(?:\/external_ids|\/season\/\d+)?)$/
 const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'with_original_language'])
 
 type VercelRequest = { method?: string; url?: string }
@@ -15,12 +15,13 @@ export default async function handler(request: VercelRequest, response: VercelRe
   const target = new URL(`https://api.themoviedb.org/3${path}`)
   incoming.searchParams.forEach((value, key) => { if (allowedQueryKeys.has(key)) target.searchParams.set(key, value) })
   try {
-    const upstream = await fetch(target, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } })
+    const upstream = await fetch(target, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(12000) })
     response.statusCode = upstream.status
     response.setHeader('Content-Type', upstream.headers.get('content-type') ?? 'application/json')
     response.setHeader('Cache-Control', 'private, max-age=60')
     response.end(new Uint8Array(await upstream.arrayBuffer()))
-  } catch {
+  } catch (cause) {
+    console.error('[TMDB proxy] Upstream request failed.', { path, cause })
     response.statusCode = 502
     response.setHeader('Content-Type', 'application/json')
     response.end(JSON.stringify({ status_message: 'Could not reach TMDB.' }))

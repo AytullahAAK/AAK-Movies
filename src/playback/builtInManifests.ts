@@ -1,10 +1,11 @@
 /**
- * Sanitized metadata copied from the two supplied manifest.json files.
- * Endpoint URLs, image URLs, signatures, and stream resolution are deliberately
- * excluded: the files did not establish an authorized playable service endpoint.
+ * Sanitized metadata copied from the two supplied manifest.json files and
+ * checked against their published setup pages. No per-user config URLs,
+ * signatures, provider keys, or returned streams belong in this registry.
  */
 export type BuiltInManifest = {
   id: string
+  provider: 'torrentio' | 'hdhub'
   name: string
   version: string
   description: string
@@ -14,7 +15,10 @@ export type BuiltInManifest = {
   catalogs: number
   configurable: boolean
   configurationRequired?: boolean
-  lookupStatus: 'disabled-unverified'
+  setupUrl: string
+  serviceUrl?: string
+  lookupStatus: 'disabled-unlicensed-scraper' | 'needs-user-config'
+  lookupMessage: string
 }
 
 export type StremioResource = string | { name: string; types?: string[]; idPrefixes?: string[] }
@@ -29,6 +33,7 @@ export function describeManifestResource(resource: StremioResource) {
 export const builtInManifests: BuiltInManifest[] = [
   {
     id: 'com.stremio.torrentio.addon',
+    provider: 'torrentio',
     name: 'Torrentio',
     version: '0.0.15',
     description: 'Provides torrent streams from scraped torrent providers.',
@@ -38,10 +43,14 @@ export const builtInManifests: BuiltInManifest[] = [
     catalogs: 0,
     configurable: true,
     configurationRequired: false,
-    lookupStatus: 'disabled-unverified',
+    setupUrl: 'https://torrentio.strem.fun',
+    serviceUrl: 'https://torrentio.strem.fun/manifest.json',
+    lookupStatus: 'disabled-unlicensed-scraper',
+    lookupMessage: 'This addon returns scraped torrent listings. Enable it only with a configured provider and content you are authorized to access.',
   },
   {
     id: 'com.stremio.HdHub',
+    provider: 'hdhub',
     name: 'HdHub',
     version: '1.0.7',
     description: 'Watch movies and series from HdHub.',
@@ -50,6 +59,8 @@ export const builtInManifests: BuiltInManifest[] = [
     idPrefixes: ['tt', 'tmdb:', 'kitsu:'],
     catalogs: 0,
     configurable: true,
-    lookupStatus: 'disabled-unverified',
+    setupUrl: 'https://hdhub.thevolecitor.qzz.io/',
+    lookupStatus: 'needs-user-config',
+    lookupMessage: 'Generate a configured manifest URL on HdHub and add it as a server environment variable. This app does not store per-user addon credentials.',
   },
 ]

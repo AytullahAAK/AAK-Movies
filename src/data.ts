@@ -47,7 +47,9 @@ export const movies: Movie[] = [
 export const hero = { ...movies[0], eyebrow: 'THE FILM EVENT OF THE YEAR', backdrop: 'https://images.unsplash.com/photo-1509316785289-025f5b846b35?auto=format&fit=crop&w=2200&q=90' }
 export const genres = ['All films', 'Action', 'Adventure', 'Animation', 'Comedy', 'Drama', 'Mystery', 'Sci-Fi', 'Thriller']
 
-const tmdbConfigured = import.meta.env.VITE_TMDB_CONFIGURED
+// Demo data is a local-development fallback only. Production always calls the
+// same-origin API so missing/rejected credentials cannot be hidden by samples.
+const useLocalDemoCatalog = import.meta.env.DEV && !import.meta.env.VITE_TMDB_CONFIGURED
 const apiBase = '/api/tmdb'
 const languageNames: Record<string, string> = { en: 'English', ja: 'Japanese', ko: 'Korean', fr: 'French', es: 'Spanish', hi: 'Hindi', zh: 'Chinese', de: 'German', it: 'Italian' }
 const imageUrl = (path: string | null | undefined, size: 'w500' | 'original' = 'w500') => path ? `https://image.tmdb.org/t/p/${size}${path}` : photos.portrait
@@ -56,13 +58,36 @@ const yearOf = (date?: string) => date?.slice(0, 4) ?? ''
 async function tmdb<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   const url = new URL(`${apiBase}${path}`, window.location.origin)
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value))
-  const response = await fetch(url, { headers: { Accept: 'application/json' } })
+  let response: Response
+  try {
+    response = await fetch(url, { headers: { Accept: 'application/json' } })
+  } catch (cause) {
+    if (import.meta.env.DEV) console.error('[TMDB] API request could not reach the same-origin proxy.', { path, cause })
+    throw new Error('Could not reach the TMDB service. Please try again.')
+  }
   if (!response.ok) {
-    if (response.status === 401) throw new Error('TMDB credentials were rejected. Check your local environment configuration.')
-    if (response.status === 404) throw new Error('TMDB could not find that title.')
+    if (import.meta.env.DEV) console.error('[TMDB] API request failed.', { path, status: response.status })
+    if (response.status === 401) throw new Error('TMDB rejected the server credentials (401). Check the TMDB Read Access Token configured for this deployment.')
+    if (response.status === 403) throw new Error('TMDB denied this request (403). Check the token permissions and TMDB API access.')
+    if (response.status === 404) {
+      if (response.headers.get('content-type')?.toLowerCase().includes('application/json')) throw new Error('TMDB could not find that title (404).')
+      throw new Error('The TMDB API route returned 404. Check Vercel function routing and the production domain.')
+    }
+    if (response.status === 429) throw new Error('TMDB is receiving too many requests (429). Please wait and try again.')
+    if (response.status === 503) throw new Error('TMDB is not configured for this deployment (503). Set TMDB_READ_ACCESS_TOKEN in Vercel Production variables, then create a new deployment.')
+    if (response.status === 502) throw new Error('The server could not reach TMDB (502). Check the deployment function logs.')
     throw new Error(`TMDB request failed (${response.status}). Please try again.`)
   }
-  return response.json() as Promise<T>
+  if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+    if (import.meta.env.DEV) console.error('[TMDB] The API proxy returned a non-JSON response.', { path, contentType: response.headers.get('content-type') })
+    throw new Error('The TMDB API returned an unexpected response. Check Vercel deployment protection and API routing.')
+  }
+  try {
+    return await response.json() as T
+  } catch (cause) {
+    if (import.meta.env.DEV) console.error('[TMDB] The API proxy returned invalid JSON.', { path, cause })
+    throw new Error('The TMDB API returned invalid data. Please try again later.')
+  }
 }
 
 type TmdbItem = Record<string, any> & { id: number; media_type?: MediaType }
@@ -93,35 +118,35 @@ function getGenreNames(type: MediaType): Promise<Record<number, string>> {
 }
 
 export async function trendingAllDay(): Promise<Media[]> {
-  if (!tmdbConfigured) return movies.map(item => ({ ...item }))
+  if (useLocalDemoCatalog) return movies.map(item => ({ ...item }))
   const data = await tmdb<{ results: TmdbItem[] }>('/trending/all/day')
   return data.results.map(normalizeMedia).filter((item): item is Media => item !== null)
 }
 export async function searchMovies(query: string): Promise<Movie[]> {
-  if (!tmdbConfigured) return query.trim() ? movies.filter(movie => movie.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : movies
+  if (useLocalDemoCatalog) return query.trim() ? movies.filter(movie => movie.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : movies
   if (!query.trim()) return []
   const [data, names] = await Promise.all([tmdb<{ results: TmdbItem[] }>('/search/movie', { query, include_adult: 'false' }), getGenreNames('movie')])
   return data.results.map(item => normalizeMovie(item, names))
 }
 export async function searchTv(query: string): Promise<TvShow[]> {
   if (!query.trim()) return []
-  if (!tmdbConfigured) return []
+  if (useLocalDemoCatalog) return []
   const [data, names] = await Promise.all([tmdb<{ results: TmdbItem[] }>('/search/tv', { query, include_adult: 'false' }), getGenreNames('tv')])
   return data.results.map(item => normalizeTv(item, names))
 }
 export async function searchCatalog(query: string, type: 'movie' | 'tv' | 'all'): Promise<Media[]> {
-  if (!query.trim() && tmdbConfigured) {
+  if (!query.trim() && !useLocalDemoCatalog) {
     const trending = await trendingAllDay()
     return type === 'all' ? trending : trending.filter(item => item.media_type === type)
   }
   if (type === 'movie') return searchMovies(query)
   if (type === 'tv') return searchTv(query)
-  if (!tmdbConfigured) return query.trim() ? movies.filter(movie => movie.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : movies
+  if (useLocalDemoCatalog) return query.trim() ? movies.filter(movie => movie.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : movies
   const [data, movieGenres, tvGenres] = await Promise.all([tmdb<{ results: TmdbItem[] }>('/search/multi', { query, include_adult: 'false' }), getGenreNames('movie'), getGenreNames('tv')])
   return data.results.map(item => item.media_type === 'movie' ? normalizeMovie(item, movieGenres) : item.media_type === 'tv' ? normalizeTv(item, tvGenres) : null).filter((item): item is Media => item !== null)
 }
 export async function getMovieDetails(id: number): Promise<MovieDetails> {
-  if (!tmdbConfigured) {
+  if (useLocalDemoCatalog) {
     const demo = movies.find(item => item.id === id)
     if (!demo) throw new Error('Configure local TMDB credentials to load other movie details.')
     return { ...demo, cast: [], recommendations: movies.filter(item => item.id !== id).slice(0, 5) }
@@ -131,13 +156,11 @@ export async function getMovieDetails(id: number): Promise<MovieDetails> {
   return { ...normalizeMovie(data), runtimeMinutes: data.runtime, cast: (data.credits?.cast ?? []).slice(0, 10).map(person => person.name), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeMovie(item)) }
 }
 export async function getTvDetails(id: number): Promise<TvDetails> {
-  if (!tmdbConfigured) throw new Error('Configure TMDB credentials on the server to load TV details.')
   const data = await tmdb<TmdbItem & { seasons?: TvSeason[]; credits?: { cast?: { name: string }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/tv/' + id, { append_to_response: 'videos,credits,recommendations' })
   const videos = data.videos?.results ?? []
   return { ...normalizeTv(data), seasons: data.seasons ?? [], cast: (data.credits?.cast ?? []).slice(0, 10).map(person => person.name), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeTv(item)) }
 }
 export async function getTvSeason(id: number, season: number): Promise<TvEpisode[]> {
-  if (!tmdbConfigured) throw new Error('Configure TMDB credentials on the server to load TV episodes.')
   const data = await tmdb<{ episodes?: TvEpisode[] }>(`/tv/${id}/season/${season}`)
   return data.episodes ?? []
 }
@@ -147,7 +170,7 @@ export function getMediaTrailerKey(media: Media): Promise<string | undefined> {
   const cacheKey = `${media.media_type}:${media.id}`
   const cached = trailerCache.get(cacheKey)
   if (cached) return cached
-  if (!tmdbConfigured) return Promise.resolve(undefined)
+  if (useLocalDemoCatalog) return Promise.resolve(undefined)
   const path = media.media_type === 'movie' ? `/movie/${media.id}` : `/tv/${media.id}`
   const request = tmdb<{ videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] } }>(path, { append_to_response: 'videos' })
     .then(data => {
