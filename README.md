@@ -46,7 +46,7 @@ npm run dev
 - `/sources` — built-in declarations and user-supplied HTTPS manifest registry
 - `/library`, `/profile`, `/admin`, `/about`, `/contact`, `/privacy`, `/terms`, `/copyright`
 
-Server API routes used by the app are `/api/tmdb/status`, `/api/tmdb/*`, `/api/addons/torrentio`, and `/api/addons/hdhub`.
+Server API routes used by the app are `/api/tmdb/status`, `/api/tmdb-proxy?path=...`, `/api/addons/torrentio`, and `/api/addons/hdhub`.
 
 ## TMDB integration
 

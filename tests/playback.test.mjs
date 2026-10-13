@@ -15,7 +15,7 @@ const [{ parseDirectMediaUrl }, { getExternalPlayerUrl, nxshaPlaybackSource }] =
   importTypeScript('src/playback/directMediaUrl.ts'),
   importTypeScript('src/playback/sources.ts'),
 ])
-const { default: tmdbHandler } = await importTypeScript('api/tmdb/[...path].ts')
+const { handleTmdbProxy: tmdbHandler } = await importTypeScript('api/_tmdbProxy.ts')
 const { default: tmdbStatusHandler } = await importTypeScript('api/tmdb/status.ts')
 const { createAddonHandler } = await importTypeScript('api/addons/[provider].ts')
 
@@ -75,7 +75,7 @@ test('TMDB proxy builds v3 movie and TV episode requests with server Bearer auth
   }
   try {
     const response = mockResponse()
-    await tmdbHandler({ method: 'GET', url: '/api/tmdb/tv/1396/season/2?language=en' }, response)
+    await tmdbHandler({ method: 'GET', url: '/api/tmdb-proxy?path=%2Ftv%2F1396%2Fseason%2F2&language=en' }, response)
     assert.equal(response.statusCode, 200)
     assert.equal(new URL(requestedUrl).origin, 'https://api.themoviedb.org')
     assert.equal(new URL(requestedUrl).pathname, '/3/tv/1396/season/2')
@@ -99,7 +99,7 @@ test('TMDB proxy rejects unknown routes and reports missing server configuration
     assert.match(missingCredential.body, /not configured/i)
 
     const unknownRoute = mockResponse()
-    await tmdbHandler({ method: 'GET', url: '/api/tmdb/configuration' }, unknownRoute)
+    await tmdbHandler({ method: 'GET', url: '/api/tmdb-proxy?path=%2Fconfiguration' }, unknownRoute)
     assert.equal(unknownRoute.statusCode, 404)
   } finally {
     if (originalToken !== undefined) process.env.TMDB_READ_ACCESS_TOKEN = originalToken
