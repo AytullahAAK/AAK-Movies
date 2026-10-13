@@ -264,3 +264,15 @@ test('addon setup errors state the exact missing operator configuration', async 
     assert.match(JSON.parse(response.body).message, new RegExp(variable))
   }
 })
+
+test('addon disabled status reveals configured variable presence without its value', async () => {
+  const manifestUrl = 'https://torrentio.strem.fun/manifest.json?secret=never-return-this-value'
+  const handler = createAddonHandler(() => ({ TORRENTIO_MANIFEST_URL: manifestUrl }))
+  const response = mockResponse()
+  await handler({ method: 'GET', url: '/api/addons/torrentio?media_type=movie&tmdb_id=550' }, response)
+  const message = JSON.parse(response.body).message
+  assert.equal(response.statusCode, 503)
+  assert.match(message, /ENABLE_AUTHORIZED_ADDON_LOOKUPS=true/)
+  assert.doesNotMatch(message, /TORRENTIO_MANIFEST_URL/)
+  assert.doesNotMatch(message, /never-return-this-value/)
+})
