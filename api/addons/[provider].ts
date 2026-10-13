@@ -68,7 +68,7 @@ function classifyStream(value: Record<string, unknown>, embedHosts: Set<string>)
   try { mediaUrl = new URL(mediaUrlValue) } catch { /* Non-URL Stremio entries are classified below. */ }
   if (mediaUrl?.protocol === 'https:' && !mediaUrl.username && !mediaUrl.password) {
     const extension = mediaUrl.pathname.toLowerCase().split('.').pop()
-    const contentType = extension === 'mp4' ? 'video/mp4' : extension === 'webm' ? 'video/webm' : extension === 'ogg' || extension === 'ogv' ? 'video/ogg' : null
+    const contentType = extension === 'mp4' ? 'video/mp4' : extension === 'webm' ? 'video/webm' : extension === 'ogg' ? 'video/ogg' : null
     if (contentType) return { playbackKind: 'direct-video' as const, url: mediaUrl.href, contentType }
     if (embedHosts.has(mediaUrl.hostname.toLowerCase())) return { playbackKind: 'embed' as const, url: mediaUrl.href }
   }
@@ -93,14 +93,15 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
       const manifestConfigured = getConfiguredManifestUrl(provider, env) !== null
       const missing = ['ENABLE_AUTHORIZED_ADDON_LOOKUPS=true']
       if (!manifestConfigured) missing.push(`a valid ${manifestVariable}`)
-      send(response, 503, { message: `${provider === 'torrentio' ? 'Torrentio' : 'HdHub'} lookups are disabled. The operator must review provider permissions and configure ${missing.join(' and ')} on the server.` })
+      if (!env.TMDB_READ_ACCESS_TOKEN) missing.push('TMDB_READ_ACCESS_TOKEN')
+      send(response, 503, { code: 'ADDON_LOOKUP_NOT_CONFIGURED', provider, required: missing, message: `${provider === 'torrentio' ? 'Torrentio' : 'HdHub'} lookups are disabled. The operator must review provider permissions and configure ${missing.join(', ')} on the server.` })
       return
     }
 
     const manifestUrl = getConfiguredManifestUrl(provider, env)
     if (!manifestUrl) {
       const variable = provider === 'torrentio' ? 'TORRENTIO_MANIFEST_URL' : 'HDHUB_MANIFEST_URL'
-      send(response, 503, { message: `Set a configured HTTPS ${variable} on the server before using ${provider === 'torrentio' ? 'Torrentio' : 'HdHub'}.` })
+      send(response, 503, { code: 'ADDON_MANIFEST_NOT_CONFIGURED', provider, required: [variable], message: `Set a configured HTTPS ${variable} on the server before using ${provider === 'torrentio' ? 'Torrentio' : 'HdHub'}.` })
       return
     }
 
@@ -114,7 +115,7 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
       send(response, 400, { message: 'TV lookups require a non-negative season number and a positive episode number.' }); return
     }
     const tmdbToken = env.TMDB_READ_ACCESS_TOKEN
-    if (!tmdbToken) { send(response, 503, { message: 'TMDB_READ_ACCESS_TOKEN is required to map this TMDB title to an addon-supported IMDb ID.' }); return }
+    if (!tmdbToken) { send(response, 503, { code: 'TMDB_TOKEN_NOT_CONFIGURED', provider, required: ['TMDB_READ_ACCESS_TOKEN'], message: 'TMDB_READ_ACCESS_TOKEN is required to map this TMDB title to an addon-supported IMDb ID.' }); return }
 
     try {
       const idPath = mediaType === 'movie' ? `/movie/${tmdbId}/external_ids` : `/tv/${tmdbId}/external_ids`
@@ -134,7 +135,9 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
       if (!manifestSupports(manifestValue, mediaType, videoId)) { send(response, 422, { message: 'This addon manifest does not declare stream support for the selected media type and ID.' }); return }
 
       const streamUrl = new URL(manifestUrl.href)
-      streamUrl.pathname = `${streamUrl.pathname.replace(/\/manifest\.json\/?$/i, '')}/stream/${stremioType}/${encodeURIComponent(videoId)}.json`.replace(/\/+/g, '/')
+      // IDs are constrained above to IMDb digits plus numeric episode suffixes.
+      // Stremio's documented video ID uses literal colons for series episodes.
+      streamUrl.pathname = `${streamUrl.pathname.replace(/\/manifest\.json\/?$/i, '')}/stream/${stremioType}/${videoId}.json`.replace(/\/+/g, '/')
       const streamResponse = await fetch(streamUrl, { headers: { Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(15000) })
       const streamValue = await readJson(streamResponse)
       if (!isRecord(streamValue) || !Array.isArray(streamValue.streams) || !streamValue.streams.every(isRecord)) throw new Error('Addon stream response has an invalid shape.')
@@ -152,7 +155,7 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
           ...classified,
         }
       })
-      send(response, 200, { provider, media_type: mediaType, id: videoId, streams })
+      send(response, 200, { code: 'ADDON_LOOKUP_OK', provider, media_type: mediaType, id: videoId, streams })
     } catch (cause) {
       const upstreamStatus = isRecord(cause) && typeof cause.upstreamStatus === 'number' ? cause.upstreamStatus : undefined
       console.error('[Addon lookup] Request failed.', { provider, status: upstreamStatus ?? 'network-or-invalid-response' })
@@ -160,7 +163,7 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
       const message = status === 429 ? `${provider} is rate limiting requests. Please try again later.`
         : status === 401 || status === 403 ? `${provider} rejected this configured addon request. Check its server-side configuration.`
           : `${provider} is unavailable or returned an invalid response.`
-      send(response, status, { message })
+      send(response, status, { code: status === 429 ? 'ADDON_RATE_LIMITED' : status === 401 || status === 403 ? 'ADDON_ACCESS_DENIED' : 'ADDON_UPSTREAM_ERROR', provider, message })
     }
   }
 }

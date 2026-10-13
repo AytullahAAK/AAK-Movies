@@ -2,8 +2,8 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { createAddonHandler } from './api/addons/[provider].ts'
 
-const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|discover\/tv|genre\/(?:movie|tv)\/list|movie\/\d+(?:\/external_ids)?|tv\/\d+(?:\/external_ids|\/season\/\d+)?)$/
-const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'with_original_language', 'with_genres', 'sort_by'])
+const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|discover\/(?:movie|tv)|watch\/providers\/(?:movie|tv)|genre\/(?:movie|tv)\/list|movie\/(?:\d+(?:\/(?:external_ids|watch\/providers))?|(?:popular|top_rated))|tv\/(?:\d+(?:\/(?:external_ids|watch\/providers|season\/\d+))?|(?:popular|top_rated)))$/
+const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'watch_region', 'with_watch_providers', 'with_watch_monetization_types', 'with_original_language', 'with_genres', 'sort_by', 'primary_release_year', 'first_air_date_year'])
 
 function localTmdbProxy(env: Record<string, string>, mode: string): Plugin {
   return {
@@ -41,7 +41,7 @@ function localTmdbProxy(env: Record<string, string>, mode: string): Plugin {
         if (token) headers.Authorization = `Bearer ${token}`
         else if (localApiKey) target.searchParams.set('api_key', localApiKey)
         try {
-          const upstream = await fetch(target, { headers })
+          const upstream = await fetch(target, { headers, signal: AbortSignal.timeout(12000) })
           response.statusCode = upstream.status
           response.setHeader('Content-Type', upstream.headers.get('content-type') ?? 'application/json')
           response.setHeader('Cache-Control', 'private, max-age=60')

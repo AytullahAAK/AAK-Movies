@@ -60,6 +60,7 @@ export const builtInManifests: BuiltInManifest[] = [
     catalogs: 0,
     configurable: true,
     setupUrl: 'https://hdhub.thevolecitor.qzz.io/',
+    serviceUrl: 'https://hdhub.thevolecitor.qzz.io/manifest.json',
     lookupStatus: 'needs-user-config',
     lookupMessage: 'Generate a configured manifest URL on HdHub and add it as a server environment variable. This app does not store per-user addon credentials.',
   },
