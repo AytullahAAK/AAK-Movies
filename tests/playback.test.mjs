@@ -15,7 +15,7 @@ const [{ parseDirectMediaUrl }, { getExternalPlayerUrl, nxshaPlaybackSource }] =
   importTypeScript('src/playback/directMediaUrl.ts'),
   importTypeScript('src/playback/sources.ts'),
 ])
-const { handleTmdbProxy: tmdbHandler } = await importTypeScript('api/_tmdbProxy.ts')
+const { default: tmdbHandler } = await importTypeScript('api/tmdb/proxy.ts')
 const { default: tmdbStatusHandler } = await importTypeScript('api/tmdb/status.ts')
 const { createAddonHandler } = await importTypeScript('api/addons/[provider].ts')
 
@@ -94,7 +94,7 @@ test('TMDB proxy rejects unknown routes and reports missing server configuration
   delete process.env.TMDB_READ_ACCESS_TOKEN
   try {
     const missingCredential = mockResponse()
-    await tmdbHandler({ method: 'GET', url: '/api/tmdb/movie/550' }, missingCredential)
+    await tmdbHandler({ method: 'GET', url: '/api/tmdb/proxy?path=%2Fmovie%2F550' }, missingCredential)
     assert.equal(missingCredential.statusCode, 503)
     assert.match(missingCredential.body, /not configured/i)
 
