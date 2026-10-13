@@ -8,7 +8,7 @@ export async function handleTmdbProxy(request: TmdbProxyRequest, response: TmdbP
   if (request.method !== 'GET') { response.statusCode = 405; response.setHeader('Allow', 'GET'); response.end('Method not allowed'); return }
   const incoming = new URL(request.url ?? '/', 'https://aak.invalid')
   const path = pathOverride === undefined
-    ? incoming.pathname === '/api/tmdb-proxy' ? incoming.searchParams.get('path') ?? '' : incoming.pathname.replace(/^\/api\/tmdb/, '')
+    ? incoming.pathname === '/api/tmdb/proxy' ? incoming.searchParams.get('path') ?? '' : incoming.pathname.replace(/^\/api\/tmdb/, '')
     : pathOverride
   const normalizedPath = `/${path.replace(/^\/+/, '')}`
   if (!allowedPaths.test(normalizedPath)) { response.statusCode = 404; response.end('TMDB route not allowed'); return }

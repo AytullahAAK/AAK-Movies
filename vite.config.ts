@@ -17,9 +17,9 @@ function localTmdbProxy(env: Record<string, string>, mode: string): Plugin {
           await addonHandler(req, response)
           return
         }
-        if (incoming.pathname !== '/api/tmdb-proxy' && !incoming.pathname.startsWith('/api/tmdb/')) return next()
+        if (!incoming.pathname.startsWith('/api/tmdb/')) return next()
         if (req.method !== 'GET') { response.statusCode = 405; response.end('Method not allowed'); return }
-        const path = incoming.pathname === '/api/tmdb-proxy' ? incoming.searchParams.get('path') ?? '' : incoming.pathname.slice('/api/tmdb'.length)
+        const path = incoming.pathname === '/api/tmdb/proxy' ? incoming.searchParams.get('path') ?? '' : incoming.pathname.slice('/api/tmdb'.length)
         const tmdbPath = path.startsWith('/') ? path : `/${path}`
         if (tmdbPath === '/status') {
           const token = env.TMDB_READ_ACCESS_TOKEN

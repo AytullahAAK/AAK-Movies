@@ -50,7 +50,7 @@ export const genres = ['All films', 'Action', 'Adventure', 'Animation', 'Comedy'
 // Demo data is a local-development fallback only. Production always calls the
 // same-origin API so missing/rejected credentials cannot be hidden by samples.
 const useLocalDemoCatalog = import.meta.env.DEV && !import.meta.env.VITE_TMDB_CONFIGURED
-const apiBase = '/api/tmdb-proxy'
+const apiBase = '/api/tmdb/proxy'
 const languageNames: Record<string, string> = { en: 'English', ja: 'Japanese', ko: 'Korean', fr: 'French', es: 'Spanish', hi: 'Hindi', zh: 'Chinese', de: 'German', it: 'Italian' }
 const imageUrl = (path: string | null | undefined, size: 'w500' | 'original' = 'w500') => path ? `https://image.tmdb.org/t/p/${size}${path}` : photos.portrait
 const yearOf = (date?: string) => date?.slice(0, 4) ?? ''
