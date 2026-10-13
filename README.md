@@ -1,66 +1,89 @@
 # AAK Movies
 
-AAK Movies is a responsive film and television discovery app built with React, TypeScript, Vite, and React Router. It retains the supplied AAK logo, frosted-glass light theme, and AMOLED night toggle.
+AAK Movies is a responsive movie and TV discovery site built with React, TypeScript, Vite, and React Router. It retains the AAK logo, light-default frosted-glass styling, and persistent AMOLED night mode.
 
 ## Run locally
 
-Use Node.js 20.19+ and npm:
+Requires Node.js 20.19+ and npm:
 
-```bash
+```powershell
 npm install
-Copy-Item .env.example .env.local # PowerShell
+Copy-Item .env.example .env.local
 npm run dev
 ```
 
-On macOS/Linux, copy the template with `cp .env.example .env.local`.
+macOS/Linux:
 
-### Environment variables
+```sh
+npm install
+cp .env.example .env.local
+npm run dev
+```
 
-- `VITE_TMDB_READ_ACCESS_TOKEN`: uses TMDB's v4 Read Access Token with `Authorization: Bearer`. Vite client variables are compiled into browser JavaScript. Use this only for local demonstrations; do not put a private production token in a `VITE_` variable. For a public deployment, proxy TMDB requests through a server endpoint that keeps the token private.
-- `VITE_TMDB_API_KEY`: public v3 API key fallback, read only in Vite development mode. It is also visible to the browser; use only a key suitable for local client demos.
-- `VITE_SITE_URL`: optional real HTTPS production origin used to create route canonical URLs and `og:url`. Leave blank on local previews. No canonical domain is assumed by default.
+## Environment variables
 
-The blank `.env.example` values are placeholders. Never commit `.env`, `.env.local`, or real API credentials.
+- `TMDB_READ_ACCESS_TOKEN`: TMDB Read Access Token. The local Vite proxy and Vercel serverless function send it as a server-side `Authorization: Bearer` value. It is not read by browser code.
+- `VITE_TMDB_API_KEY`: optional public v3 key for local development only when no Read Access Token is set. The local proxy adds it server-side. Do not use it to expose a private credential in a public client bundle.
+- `VITE_SITE_URL`: optional real HTTPS production origin. Route canonicals and `og:url` are omitted when it is absent or appears to be a reserved/local host.
+
+`.env.example` contains placeholders only. Keep real values in ignored `.env.local` and deployment environment settings. Never commit tokens or keys.
 
 ## Routes
 
-- `/` home and trending movies/TV series
-- `/discover` discovery with Movies, TV Shows, and All; search, genre, year, language, and sort controls
-- `/movie/:id` movie details, cast, trailer, recommendations, and movie playback link
-- `/tv/:id` TV series details, season list, cast, and trailer
-- `/tv/:id/season/:seasonNumber` season episode guide
-- `/watch/movie/:id` movie-only Nxsha iframe integration (`/watch/:id` remains a movie alias)
-- `/watch/tv/:id/:seasonNumber/:episodeNumber` explicit no-provider state for TV episodes
-- `/player` personal direct-media HTML5 player
-- `/sources` local HTTPS Stremio-compatible manifest registry
+- `/` — featured titles, trending movies and series, collections
+- `/discover?media=movie|tv|all` — search, type switch, genre, year, language, and sort filters
+- `/movie/:id` — movie metadata, cast, trailer, and recommendations
+- `/tv/:id` — TV metadata, seasons, cast, trailer, and recommendations
+- `/tv/:id/season/:seasonNumber` — season episode guide, including season zero when TMDB provides it
+- `/watch/movie/:id` — movie playback selector; Nxsha is selected by default
+- `/watch/tv/:id/:seasonNumber/:episodeNumber` — episode playback selector, season/episode selection, and adjacent-episode navigation
+- `/watch/:id` — existing movie alias
+- `/player` — Universal Player for direct video and built-in manifest metadata
+- `/sources` — built-in declarations and user-supplied HTTPS manifest registry
 - `/library`, `/profile`, `/admin`, `/about`, `/contact`, `/privacy`, `/terms`, `/copyright`
 
-TMDB-backed routes call `/trending/all/day`, `/search/movie`, `/search/tv`, `/search/multi`, `/movie/:id`, `/tv/:id`, and `/tv/:id/season/:seasonNumber`. Internal catalog records carry `media_type` so a TV ID is never routed into the movie endpoint. When no credential is set, movie discovery/details use a small local demo catalog; TV search and metadata show an empty/configuration state. Demo titles do not display fabricated ratings.
+## TMDB integration
+
+The same-origin proxy supports `/trending/all/day`, `/search/movie`, `/search/tv`, `/search/multi`, movie and TV detail routes, TV season routes, genre lists, and video metadata appended to detail requests. The internal media model uses `media_type: 'movie' | 'tv'`; TV records preserve `name`, `first_air_date`, `number_of_seasons`, and `number_of_episodes`. Season and episode metadata comes from TMDB. Demo movie data is used when no credential is configured, with no fabricated ratings.
+
+TMDB supplies metadata and artwork; it does not guarantee playable video. Movie and TV information and images are provided by TMDB. AAK Movies uses the TMDB API but is not endorsed or certified by TMDB. Before public or commercial use, review TMDB's current API terms, attribution and branding requirements, rate limits, and licensing rules.
 
 ## Playback and manifest limits
 
-- Nxsha remains the movie iframe source with the configured `https://web.nxsha.app/embed/movie/{providerId}?color=orange` template. The explicit mapper currently maps a movie's TMDB ID to the template ID; provider support and permission are unverified. It rejects TV records, and the app does not claim iframe errors are reliably detectable. The “Player not loading?” control provides a manual fallback.
-- TV episode playback remains unavailable until an authorized provider has an explicit episode ID mapping. A show/episode TMDB ID is never sent to the movie iframe endpoint.
-- `/player` accepts direct HTTPS paths ending in MP4, WebM, or Ogg extensions. A webpage/embed page, torrent, or manifest is not a direct video file. Browser media errors display a fallback. Use only media you have the right to play.
-- `/sources` validates HTTPS manifest JSON shape and stores declared name, ID, types, and resources in local browser storage. Browser CORS may prevent inspection. It is a registry only; it does not resolve streams, scrape sources, or process torrents.
-- The admin page is a shell. Authentication, server-side roles, persistence, and privileged operations are not configured. Do not expose it with write access until those protections exist.
-- The library is in-memory for the current visit. Authentication and synced watchlists are not connected.
+The title watch screens expose exactly two primary choices:
 
-## TMDB attribution and licensing
+1. **Nxsha Player** — selected by default. Movie URLs use `https://web.nxsha.app/embed/movie/{TMDB_MOVIE_ID}?color=orange`. TV episodes use `https://web.nxsha.app/embed/tv/{TMDB_TV_ID}/{SEASON_NUMBER}/{EPISODE_NUMBER}` without the movie color parameter. The mapping is explicit and rejects invalid IDs and episode numbers. Nxsha support, permission, supported IDs, mobile behavior, and actual playback have **not been verified**. An iframe `load` event only means a document responded; browser iframe errors do not reliably reveal player or media failures. The player offers a manual retry/fallback state.
+2. **Universal Player** — accepts direct HTTPS MP4, WebM, and Ogg file URLs in a native HTML5 player, with browser controls and playback-speed selection. A normal webpage, iframe URL, torrent reference, or manifest is not a direct video file. Actual support still depends on the browser, host, media format, and access policy.
 
-Movie/TV information and artwork are provided by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Before public or commercial deployment, review the current TMDB API terms, attribution and branding rules, rate limits, and applicable licensing requirements. Do not invent or imply provider ratings or metadata when a field is absent.
+The two supplied manifests are registered as sanitized declarations inside Universal Player and `/sources`:
 
-## SEO and deployment
+- **Torrentio** (`com.stremio.torrentio.addon`, `0.0.15`) declares `stream` for `movie`, `series`, and `anime`, with `tt` and `kitsu` ID prefixes at the resource level; manifest types are `movie`, `series`, `anime`, and `other`. It is configurable and says configuration is not required.
+- **HdHub** (`com.stremio.HdHub`, `1.0.7`) declares `stream` and `catalog`, types `movie`, `series`, and `HdHub`, and ID prefixes `tt`, `tmdb:`, and `kitsu:`. It is marked configurable; the manifest does not state whether configuration is required.
 
-Route changes update document titles, descriptions, and Open Graph title/description/type. Canonical URLs and `og:url` are emitted only when `VITE_SITE_URL` is set to a real HTTPS domain. `public/robots.txt` allows crawling; after choosing a production domain, generate and publish a sitemap, then add its absolute URL to `robots.txt`. Configure Open Graph image URLs for the production origin if social previews require absolute URLs.
+The JSON files provide no addon base URL or configuration schema. Torrentio's description identifies scraped torrent streams; HdHub's authorization and usable endpoint are not established by its JSON. Therefore these entries display their declared capabilities only: they do not send catalog or stream requests, convert TMDB IDs, resolve torrents, or play returned streams. No endpoint, URL, or signature has been invented or copied into browser code. User-supplied manifest URLs in `/sources` are validated as HTTPS JSON metadata and stored in local browser storage; CORS may block inspection. A manifest registry is not a stream integration.
 
-Vercel settings: framework Vite, build command `npm run build`, output directory `dist`, Node.js 20.19 or later. Add an SPA rewrite so React Router deep links serve `index.html`. Keep the TMDB Read Access Token server-side in production and proxy requests; never set it as a public `VITE_` value in a public deployment.
+## SEO, robots, and sitemap
+
+Route changes set a title, description, Open Graph title/description/type, and Twitter title/description. Canonical and `og:url` values are only emitted when `VITE_SITE_URL` is configured as a non-reserved HTTPS host. After choosing the production domain, generate a sitemap for the routes you want indexed and add its absolute URL to `public/robots.txt`. The current robots file allows crawling but does not name a sitemap because no production domain is assumed.
+
+## Vercel deployment
+
+Use Vite as the framework, `npm run build` as the build command, and `dist` as the output directory. Configure `TMDB_READ_ACCESS_TOKEN` as a server-side Vercel environment variable and set `VITE_SITE_URL` to the real HTTPS site origin. The `/api/tmdb/[...path].ts` function keeps the Read Access Token server-side. Ensure deep links fall back to the SPA while `/api/tmdb/*` continues to route to the function. Do not set the Read Access Token under a `VITE_` name.
 
 ## Checks
 
-```bash
+```sh
 npm run typecheck
 npm run build
 ```
 
-There is no dedicated test runner configured. These checks run the TypeScript project build and Vite production bundle.
+`npm run lint` currently runs the TypeScript project check. The repository does not configure a separate automated test runner. External iframe playback and provider authorization need independent verification before being described as operational.
+
+## Commit and push
+
+```sh
+git status
+git add src api README.md .env.example vite.config.ts tsconfig.app.json tsconfig.node.json
+git commit -m "Add TV episode playback and universal player"
+git push
+```

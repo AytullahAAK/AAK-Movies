@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { ArrowDownWideNarrow, ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, Clapperboard, Compass, Heart, Info, Instagram, Library, ListFilter, LockKeyhole, Mail, Menu, MonitorPlay, Moon, Play, Search, Settings, ShieldCheck, Sparkles, Star, Sun, Twitter, X } from 'lucide-react'
-import { demoHero, genres, getMovieDetails, getTvDetails, getTvSeason, mediaDate, mediaTypeLabel, mediaYear, movies, searchCatalog, trendingAllDay, type Media, type Movie, type MovieDetails, type TvDetails, type TvEpisode, type TvShow } from './data'
-import { getExternalPlayerUrl, nxshaPlaybackSource } from './playback/sources'
-import { NativeVideoPlayer, type DirectMediaSource } from './playback/NativeVideoPlayer'
+import { ArrowDownWideNarrow, ArrowLeft, ArrowRight, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Clapperboard, Compass, Heart, Info, Instagram, Library, ListFilter, LockKeyhole, Mail, Menu, MonitorPlay, Moon, Play, Search, Settings, ShieldCheck, Sparkles, Star, Sun, Twitter, Volume2, VolumeX, X } from 'lucide-react'
+import { demoHero, genres, getMediaTrailerKey, getMovieDetails, getTvDetails, getTvSeason, mediaDate, mediaTypeLabel, mediaYear, movies, searchCatalog, trendingAllDay, type Media, type Movie, type MovieDetails, type TvDetails, type TvEpisode, type TvShow } from './data'
+import { getExternalPlayerUrl, nxshaPlaybackSource, type PlaybackTarget } from './playback/sources'
+import { UniversalPlayerPanel } from './playback/UniversalPlayerPanel'
+import { builtInManifests, describeManifestResource, type StremioResource } from './playback/builtInManifests'
 
 function mediaKey(item: Media) { return `${item.media_type}:${item.id}` }
 function isSaved(saved: Media[], item: Media) { return saved.some(value => mediaKey(value) === mediaKey(item)) }
@@ -22,12 +23,12 @@ function App() {
     <main><Routes>
       <Route path="/" element={<Home saved={saved} toggleSaved={toggleSaved} />} />
       <Route path="/discover" element={<Discover saved={saved} toggleSaved={toggleSaved} />} />
-      <Route path="/movie/:id" element={<MovieDetailsPage saved={saved} toggleSaved={toggleSaved} />} />
-      <Route path="/tv/:id" element={<TvDetailsPage saved={saved} toggleSaved={toggleSaved} />} />
-      <Route path="/tv/:id/season/:seasonNumber" element={<TvSeasonPage />} />
-      <Route path="/watch/movie/:id" element={<MovieWatchPage />} />
-      <Route path="/watch/tv/:id/:seasonNumber/:episodeNumber" element={<EpisodeWatchPage />} />
-      <Route path="/watch/:id" element={<MovieWatchPage />} />
+      <Route path="/movie/:id" element={<MovieDetailsPage key={location.pathname} saved={saved} toggleSaved={toggleSaved} />} />
+      <Route path="/tv/:id" element={<TvDetailsPage key={location.pathname} saved={saved} toggleSaved={toggleSaved} />} />
+      <Route path="/tv/:id/season/:seasonNumber" element={<TvSeasonPage key={location.pathname} />} />
+      <Route path="/watch/movie/:id" element={<MovieWatchPage key={location.pathname} />} />
+      <Route path="/watch/tv/:id/:seasonNumber/:episodeNumber" element={<EpisodeWatchPage key={location.pathname} />} />
+      <Route path="/watch/:id" element={<MovieWatchPage key={location.pathname} />} />
       <Route path="/player" element={<DirectPlayer />} />
       <Route path="/sources" element={<ManifestManager />} />
       <Route path="/library" element={<LibraryPage saved={saved} toggleSaved={toggleSaved} />} />
@@ -67,26 +68,84 @@ function usePageMeta(title: string, description: string, type = 'website') {
     let canonical = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]')
     try {
       const origin = configured ? new URL(configured) : null
-      if (origin && origin.protocol === 'https:' && !/(localhost|\.localhost|example\.(com|org|net)|\.example$|127\.0\.0\.1|::1)/i.test(origin.hostname)) {
+      const hostname = origin?.hostname ?? ''
+      const reservedHost = !hostname.includes('.') || /(^|\.)(localhost|local|invalid|test|example|example\.(com|org|net))$/i.test(hostname) || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) || /^(127\.|10\.|192\.168\.|0\.)/.test(hostname) || /^172\.(1[6-9]|2\d|3[01])\./.test(hostname)
+      if (origin && origin.protocol === 'https:' && !origin.username && !origin.password && !reservedHost) {
         if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.appendChild(canonical) }
-        canonical.href = new URL(window.location.pathname + window.location.search, origin).href
+        canonical.href = new URL(window.location.pathname, origin).href
         setMeta('meta[property="og:url"]', 'content', canonical.href)
-      } else canonical?.remove()
-    } catch { canonical?.remove() }
+        setMeta('meta[property="og:image"]', 'content', new URL('/images/aak-movies-logo.png', origin).href)
+      } else {
+        canonical?.remove()
+        document.head.querySelector('meta[property="og:url"]')?.remove()
+        document.head.querySelector('meta[property="og:image"]')?.remove()
+      }
+      setMeta('meta[property="og:site_name"]', 'content', 'AAK Movies')
+      setMeta('meta[name="twitter:card"]', 'content', 'summary')
+      setMeta('meta[name="twitter:title"]', 'content', title)
+      setMeta('meta[name="twitter:description"]', 'content', description)
+    } catch { canonical?.remove(); document.head.querySelector('meta[property="og:url"]')?.remove(); document.head.querySelector('meta[property="og:image"]')?.remove() }
   }, [title, description, type])
 }
 
 function Home({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: Media) => void }) {
-  const [trending, setTrending] = useState<Media[]>(movies)
+  const [trending, setTrending] = useState<Media[]>([demoHero])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [trailer, setTrailer] = useState<{ mediaKey: string; key: string } | null>(null)
+  const [muted, setMuted] = useState(true)
+  const [heroVisible, setHeroVisible] = useState(true)
+  const [pageVisible, setPageVisible] = useState(!document.hidden)
+  const heroRef = useRef<HTMLElement>(null)
+  const previewFrame = useRef<HTMLIFrameElement>(null)
   usePageMeta('AAK Movies — Discover Movies & TV Series', 'Explore trending movies and television series on AAK Movies.')
   useEffect(() => { let active = true; trendingAllDay().then(items => { if (active) setTrending(items) }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Catalog unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [])
+  const featured = trending.length ? trending.slice(0, 4) : [demoHero]
+  const currentIndex = activeIndex % featured.length
+  const activeItem = featured[currentIndex]
+  const activeKey = mediaKey(activeItem)
+  useEffect(() => {
+    const node = heroRef.current
+    if (!node || !('IntersectionObserver' in window)) return
+    const observer = new IntersectionObserver(entries => setHeroVisible(entries[0]?.isIntersecting ?? true), { threshold: 0.18 })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  useEffect(() => {
+    const updateVisibility = () => setPageVisible(!document.hidden)
+    document.addEventListener('visibilitychange', updateVisibility)
+    return () => document.removeEventListener('visibilitychange', updateVisibility)
+  }, [])
+  useEffect(() => {
+    setTrailer(null)
+    setMuted(true)
+    if (!heroVisible || !pageVisible) return
+    let current = true
+    const timer = window.setTimeout(() => {
+      getMediaTrailerKey(activeItem).then(key => { if (current && key) setTrailer({ mediaKey: activeKey, key }) }).catch(() => { /* Keep the artwork when TMDB has no reachable trailer. */ })
+    }, 2000)
+    return () => { current = false; window.clearTimeout(timer) }
+  }, [activeItem, activeKey, heroVisible, pageVisible])
+  const goToFeatured = (direction: number) => setActiveIndex((currentIndex + direction + featured.length) % featured.length)
+  const isMovie = activeItem.media_type === 'movie'
+  const titlePath = isMovie ? `/movie/${activeItem.id}` : `/tv/${activeItem.id}`
+  const watchPath = isMovie ? `/watch/movie/${activeItem.id}` : titlePath
+  const previewKey = trailer?.mediaKey === activeKey ? trailer.key : null
+  const toggleMute = () => {
+    const nextMuted = !muted
+    setMuted(nextMuted)
+    previewFrame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: nextMuted ? 'mute' : 'unMute', args: [] }), 'https://www.youtube-nocookie.com')
+  }
   const trendingMovies = trending.filter((item): item is Movie => item.media_type === 'movie')
   const trendingShows = trending.filter((item): item is TvShow => item.media_type === 'tv')
-  return <><section className="hero" style={{ backgroundImage: `linear-gradient(90deg, rgba(9,10,12,.91) 0%, rgba(9,10,12,.76) 34%, rgba(9,10,12,.24) 70%, rgba(9,10,12,.08) 100%),linear-gradient(0deg,rgba(9,10,12,.86),transparent 40%),url('${demoHero.backdrop}')` }}>
-    <div className="hero-content"><div className="eyebrow"><Sparkles size={13} /> {demoHero.eyebrow}</div><h1>{demoHero.title}</h1><div className="hero-meta"><span>{mediaYear(demoHero)}</span><i /><span>Movie</span><i /><span>{demoHero.genre}</span></div><p>{demoHero.overview}</p><div className="hero-actions"><Link className="button button-primary" to={`/watch/movie/${demoHero.id}`}><Play size={17} fill="currentColor" /> Watch now</Link><Link className="button button-quiet" to={`/movie/${demoHero.id}`}><Info size={17} /> More details <ArrowRight size={15} /></Link></div><div className="hero-caption"><span className="caption-line" /> AAK MOVIES COLLECTION</div></div>
-    <div className="hero-index"><span>01</span><div /><span>04</span></div>
+  return <><section ref={heroRef} className="hero" aria-label="Featured titles">
+    <div className="hero-ambient" style={{ backgroundImage: `url('${activeItem.backdrop}')` }} aria-hidden="true" />
+    <div key={activeKey} className="hero-artwork" style={{ backgroundImage: `url('${activeItem.backdrop}')` }} aria-hidden="true" />
+    {previewKey && heroVisible && pageVisible && <div className="hero-preview-layer" aria-hidden="true"><iframe ref={previewFrame} title="Muted featured trailer preview" src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(previewKey)}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`} allow="autoplay; encrypted-media; picture-in-picture" tabIndex={-1} /></div>}
+    <div className="hero-scrim" aria-hidden="true" />
+    <div className="hero-content"><div className="eyebrow"><Sparkles size={13} /> {isMovie ? 'FEATURED FILM' : 'FEATURED SERIES'}</div><h1 aria-live="polite">{activeItem.title}</h1><div className="hero-meta">{mediaYear(activeItem) && <><span>{mediaYear(activeItem)}</span><i /></>}<span>{mediaTypeLabel(activeItem)}</span><i /><span>{activeItem.genre}</span>{activeItem.vote_average !== undefined && <><i /><span className="rated"><Star size={12} fill="currentColor" /> {activeItem.vote_average.toFixed(1)}</span></>}</div><p>{activeItem.overview || 'Discover the story and details.'}</p><div className="hero-actions"><Link className="button button-primary" to={watchPath}>{isMovie ? <><Play size={17} fill="currentColor" /> Watch now</> : <>Explore series <ArrowRight size={15} /></>}</Link><Link className="button button-quiet" to={titlePath}><Info size={17} /> More details <ArrowRight size={15} /></Link></div><div className="hero-caption"><span className="caption-line" /> AAK MOVIES COLLECTION</div></div>
+    <div className="hero-controls"><div className="hero-step-controls"><button className="circle-control" onClick={() => goToFeatured(-1)} aria-label="Previous featured title"><ChevronLeft size={17} /></button><button className="circle-control" onClick={() => goToFeatured(1)} aria-label="Next featured title"><ChevronRight size={17} /></button></div>{previewKey && <button className="hero-mute" onClick={toggleMute} aria-label={muted ? 'Unmute trailer preview' : 'Mute trailer preview'} title={muted ? 'Unmute preview' : 'Mute preview'}>{muted ? <VolumeX size={16} /> : <Volume2 size={16} />}<span>{muted ? 'Muted' : 'Sound on'}</span></button>}<div className="hero-index" aria-label={`Featured title ${currentIndex + 1} of ${featured.length}`}><span>{String(currentIndex + 1).padStart(2, '0')}</span><div /><span>{String(featured.length).padStart(2, '0')}</span></div></div>
   </section>
   <section className="content-section"><div className="section-heading"><div><div className="section-kicker">HANDPICKED FOR YOU</div><h2>Stories worth staying in for<span>.</span></h2></div><Link className="text-link" to="/discover">Explore all titles <ArrowRight size={15} /></Link></div><div className="genre-chips">{['All films', 'Drama', 'Sci-Fi', 'Thriller', 'Adventure', 'Documentary'].map((genre, index) => <Link className={index === 0 ? 'genre-chip selected' : 'genre-chip'} to={`/discover?genre=${encodeURIComponent(genre)}`} key={genre}>{genre}</Link>)}</div>
     {error && <p className="catalog-error" role="status">{error}</p>}{loading && <SkeletonRow title="Trending today" />}<MediaRow title="Trending movies today" kicker="TMDB TRENDING · DAY" items={trendingMovies.slice(0, 8)} saved={saved} toggleSaved={toggleSaved} />{trendingShows.length > 0 && <MediaRow title="Trending TV series today" kicker="TMDB TRENDING · DAY" items={trendingShows.slice(0, 8)} saved={saved} toggleSaved={toggleSaved} />}</section>
@@ -107,7 +166,7 @@ function Discover({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: 
   return <div className="page-wrap"><div className="page-intro"><div className="section-kicker">A WORLD OF STORIES</div><h1>Find your next<br /><em>favorite.</em></h1><p>A thoughtfully gathered collection of movies and series for wherever your curiosity takes you.</p></div>
     <div className="media-switch" role="group" aria-label="Choose content type">{(['movie', 'tv', 'all'] as const).map(value => <button key={value} className={mediaFilter === value ? 'active' : ''} aria-pressed={mediaFilter === value} onClick={() => chooseMedia(value)}>{value === 'movie' ? 'Movies' : value === 'tv' ? 'TV Shows' : 'All'}</button>)}</div>
     <div className="discover-tools"><label className="search-field"><Search size={18} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={`Search ${mediaFilter === 'movie' ? 'movies' : mediaFilter === 'tv' ? 'TV shows' : 'movies and TV shows'}…`} aria-label="Search movies and TV shows" />{query && <button onClick={() => setQuery('')} aria-label="Clear search"><X size={16} /></button>}</label><div className="filter-row"><div className="genre-filter">{genres.map(item => <button key={item} className={selectedGenre === item ? 'filter-chip active' : 'filter-chip'} onClick={() => { setSelectedGenre(item); navigate(item === 'All films' ? '/discover' : `/discover?genre=${encodeURIComponent(item)}&media=${mediaFilter}`, { replace: true }) }}>{item}</button>)}</div><div className="select-filters"><label><ListFilter size={14} /><select value={year} onChange={e => setYear(e.target.value)} aria-label="Filter by year"><option>Any year</option>{['2026', '2025', '2024', '2023', '2022', '2021'].map(v => <option key={v}>{v}</option>)}</select><ChevronDown size={13} /></label><label><ListFilter size={14} /><select value={language} onChange={e => setLanguage(e.target.value)} aria-label="Filter by language"><option>Any language</option>{['English', 'Japanese', 'Korean', 'French', 'Spanish', 'Hindi'].map(v => <option key={v}>{v}</option>)}</select><ChevronDown size={13} /></label><label><ArrowDownWideNarrow size={14} /><select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort results"><option>Popular</option><option>Top rated</option><option>Newest</option></select><ChevronDown size={13} /></label></div></div></div>
-    <div className="results-head"><span>{loading ? 'Finding titles…' : `${filtered.length} ${filtered.length === 1 ? 'title' : 'titles'} to explore`}</span><span>COLLECTED WITH CARE</span></div>{error ? <div className="empty-state" role="alert"><Info /><h3>We couldn’t load the catalog</h3><p>{error}</p><button className="button button-outline" onClick={() => setQuery(`${query} `)}>Try again</button></div> : loading ? <SkeletonGrid /> : filtered.length ? <div className="discover-grid">{filtered.map(item => <MediaCard item={item} saved={isSaved(saved, item)} toggleSaved={toggleSaved} key={`${item.media_type}-${item.id}`} />)}</div> : <div className="empty-state"><Search /><h3>No titles found in this frame.</h3><p>{mediaFilter === 'tv' && !import.meta.env.VITE_TMDB_READ_ACCESS_TOKEN && !import.meta.env.VITE_TMDB_API_KEY ? 'Add TMDB demo credentials to search TV shows.' : 'Try another title or loosen your filters.'}</p><button className="button button-outline" onClick={() => { setQuery(''); setSelectedGenre('All films'); setYear('Any year'); setLanguage('Any language') }}>Clear filters</button></div>}</div>
+    <div className="results-head"><span>{loading ? 'Finding titles…' : `${filtered.length} ${filtered.length === 1 ? 'title' : 'titles'} to explore`}</span><span>COLLECTED WITH CARE</span></div>{error ? <div className="empty-state" role="alert"><Info /><h3>We couldn’t load the catalog</h3><p>{error}</p><button className="button button-outline" onClick={() => setQuery(`${query} `)}>Try again</button></div> : loading ? <SkeletonGrid /> : filtered.length ? <div className="discover-grid">{filtered.map(item => <MediaCard item={item} saved={isSaved(saved, item)} toggleSaved={toggleSaved} key={`${item.media_type}-${item.id}`} />)}</div> : <div className="empty-state"><Search /><h3>No titles found in this frame.</h3><p>{mediaFilter === 'tv' && !import.meta.env.VITE_TMDB_CONFIGURED ? 'Add TMDB server credentials to search TV shows.' : 'Try another title or loosen your filters.'}</p><button className="button button-outline" onClick={() => { setQuery(''); setSelectedGenre('All films'); setYear('Any year'); setLanguage('Any language') }}>Clear filters</button></div>}</div>
 }
 
 function MediaRow({ title, kicker, items, saved, toggleSaved }: { title: string; kicker: string; items: Media[]; saved: Media[]; toggleSaved: (item: Media) => void }) {
@@ -144,36 +203,150 @@ function TvDetailsPage({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (i
 }
 
 function TvSeasonPage() {
-  const { id, seasonNumber } = useParams(); const showId = Number(id); const seasonNo = Number(seasonNumber); const [show, setShow] = useState<TvDetails | null>(null); const [episodes, setEpisodes] = useState<TvEpisode[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
+  const { id, seasonNumber } = useParams()
+  const showId = Number(id)
+  const seasonNo = Number(seasonNumber)
+  const [show, setShow] = useState<TvDetails | null>(null)
+  const [episodes, setEpisodes] = useState<TvEpisode[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
   usePageMeta(show ? `${show.title} — Season ${seasonNo} | AAK Movies` : 'TV Episodes | AAK Movies', 'Browse episode metadata and season information.')
-  useEffect(() => { let active = true; setLoading(true); setError(''); Promise.all([getTvDetails(showId), getTvSeason(showId, seasonNo)]).then(([series, items]) => { if (active) { setShow(series); setEpisodes(items) } }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Season unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [showId, seasonNo])
-  if (loading || error) return <PageState loading={loading} error={error} />
-  if (!show) return <PageState error="Series not found." />
-  return <div className="page-wrap episode-page"><Link to={`/tv/${show.id}`} className="back-link"><ArrowLeft size={14} /> Back to {show.title}</Link><div className="page-intro"><div className="section-kicker">TV SERIES · EPISODE GUIDE</div><h1>{show.title}<br /><em>Season {seasonNo}</em></h1><p>{episodes.length} episodes listed by TMDB.</p></div><div className="episode-list">{episodes.length ? episodes.map(episode => <article className="episode-card" key={episode.id}><div className="episode-number">{String(episode.episode_number).padStart(2, '0')}</div><div className="episode-copy"><h3>{episode.name || `Episode ${episode.episode_number}`}</h3><p>{episode.overview || 'No episode synopsis is available.'}</p><small>{episode.air_date || 'Air date not listed'}{episode.runtime ? ` · ${episode.runtime} min` : ''}</small></div><Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${episode.episode_number}`} aria-label={`Open ${episode.name || `episode ${episode.episode_number}`} playback options`}><Play size={14} /> Options</Link></article>) : <div className="empty-state"><Info /><h3>No episode information listed.</h3></div>}</div></div>
+  useEffect(() => {
+    let active = true
+    setLoading(true); setError('')
+    if (!Number.isSafeInteger(showId) || showId <= 0 || !Number.isSafeInteger(seasonNo) || seasonNo < 0) {
+      setError('This TV show or season number is invalid.'); setLoading(false)
+      return () => { active = false }
+    }
+    Promise.all([getTvDetails(showId), getTvSeason(showId, seasonNo)]).then(([series, items]) => { if (active) { setShow(series); setEpisodes(items) } }).catch(e => { if (active) setError(e instanceof Error ? e.message : 'Season unavailable.') }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [showId, seasonNo, attempt])
+  if (loading) return <PageState loading />
+  if (error) return <PageState error={error} onRetry={() => setAttempt(value => value + 1)} />
+  if (!show) return <PageState error="Series not found." onRetry={() => setAttempt(value => value + 1)} />
+  return <div className="page-wrap episode-page"><Link to={`/tv/${show.id}`} className="back-link"><ArrowLeft size={14} /> Back to {show.title}</Link><div className="page-intro"><div className="section-kicker">TV SERIES · EPISODE GUIDE</div><h1>{show.title}<br /><em>Season {seasonNo}</em></h1><p>{episodes.length} episodes listed by TMDB.</p></div><div className="episode-list">{episodes.length ? episodes.map(episode => <article className="episode-card" key={episode.id}><div className="episode-still">{episode.still_path && <img src={`https://image.tmdb.org/t/p/w300${episode.still_path}`} alt={`${episode.name || `Episode ${episode.episode_number}`} still`} loading="lazy" onError={event => { event.currentTarget.style.display = 'none' }} />}</div><div className="episode-number">{String(episode.episode_number).padStart(2, '0')}</div><div className="episode-copy"><h3>{episode.name || `Episode ${episode.episode_number}`}</h3><p>{episode.overview || 'No episode synopsis is available.'}</p><small>{episode.air_date || 'Air date not listed'}{episode.runtime ? ` · ${episode.runtime} min` : ''}</small></div><Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${episode.episode_number}`} aria-label={`Watch ${episode.name || `episode ${episode.episode_number}`} playback options`}><Play size={14} /> Watch</Link></article>) : <div className="empty-state"><Info /><h3>No episode information listed.</h3><p>TMDB has not provided episodes for this season.</p></div>}</div></div>
 }
 
 function MovieWatchPage() {
-  const { id } = useParams(); const numericId = Number(id); const [movie, setMovie] = useState<Movie | null>(movies.find(item => item.id === numericId) ?? null); const [loading, setLoading] = useState(true); const [failed, setFailed] = useState(false); const [error, setError] = useState(''); const url = movie ? getExternalPlayerUrl(nxshaPlaybackSource, movie) : null
-  usePageMeta(movie ? `Watch ${movie.title} | AAK Movies` : 'Movie player | AAK Movies', 'External movie player page. Provider support and playback availability are unverified.')
-  useEffect(() => { let active = true; setLoading(true); setFailed(false); setError(''); getMovieDetails(numericId).then(data => { if (active) setMovie(data) }).catch(e => { if (active && !movies.some(item => item.id === numericId)) setError(e instanceof Error ? e.message : 'Movie unavailable.') }).finally(() => { if (active) setLoading(false) }); return () => { active = false } }, [numericId])
+  const { id } = useParams()
+  const numericId = Number(id)
+  const [movie, setMovie] = useState<Movie | null>(movies.find(item => item.id === numericId) ?? null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  const [player, setPlayer] = useState<'nxsha' | 'universal'>('nxsha')
+  const target: PlaybackTarget | null = movie ? { media_type: 'movie', id: movie.id } : null
+  const url = target ? getExternalPlayerUrl(nxshaPlaybackSource, target) : null
+  usePageMeta(movie ? `Watch ${movie.title} | AAK Movies` : 'Movie player | AAK Movies', 'Movie playback choices on AAK Movies. External provider playback is unverified.')
+  useEffect(() => {
+    let active = true
+    setLoading(true); setError(''); setPlayer('nxsha')
+    if (!Number.isSafeInteger(numericId) || numericId <= 0) { setError('This movie ID is invalid.'); setLoading(false); return () => { active = false } }
+    getMovieDetails(numericId).then(data => { if (active) setMovie(data) }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Movie unavailable.') }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [numericId, attempt])
   if (loading) return <PageState loading />
-  if (error || !movie || !url) return <PageState error={error || 'A playback source is not configured for this movie.'} />
-  return <div className="watch-page"><div className="watch-top"><Link to={`/movie/${movie.id}`} className="back-link"><ArrowLeft size={14} /> Back to {movie.title}</Link><span className="watch-title">EXTERNAL PLAYER <i /> {movie.title}</span></div><div className="player-frame">{failed ? <PlayerUnavailable movie={movie} retry={() => setFailed(false)} /> : <><iframe title={`External ${nxshaPlaybackSource.name} player for ${movie.title}`} src={url} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="no-referrer" /><div className="player-note"><span><LockKeyhole size={13} /> External player by {nxshaPlaybackSource.name} · unverified</span><button onClick={() => setFailed(true)}>Player not loading?</button></div></>}</div><p className="player-disclaimer">The browser does not reliably report iframe playback failures. Use “Player not loading?” if the provider frame stays blank. Provider permission, ID support, and playback are unverified.</p><div className="watch-information"><div><div className="section-kicker">MOVIE</div><h1>{movie.title}</h1><p>{mediaYear(movie)} <i /> {movie.runtime ?? 'Runtime unavailable'}</p></div><Link className="button button-quiet" to={`/movie/${movie.id}`}>Movie details <ArrowRight size={15} /></Link></div></div>
+  if (error || !movie || !url) return <PageState error={error || 'A playback source is not configured for this movie.'} onRetry={() => setAttempt(value => value + 1)} />
+  return <div className="watch-page"><div className="watch-top"><Link to={`/movie/${movie.id}`} className="back-link"><ArrowLeft size={14} /> Back to {movie.title}</Link><span className="watch-title">MOVIE PLAYER <i /> {movie.title}</span></div><PlayerChoices selected={player} onChange={setPlayer} /><div className="watch-player-content">{player === 'nxsha' ? <ExternalIframePlayer key={url} title={`${nxshaPlaybackSource.name} player for ${movie.title}`} src={url} /> : <UniversalPlayerPanel contextLabel={movie.title} />}</div><div className="watch-information"><div><div className="section-kicker">MOVIE</div><h1>{movie.title}</h1><p>{mediaYear(movie)} <i /> {movie.runtime ?? 'Runtime unavailable'}</p></div><Link className="button button-quiet" to={`/movie/${movie.id}`}>Movie details <ArrowRight size={15} /></Link></div></div>
 }
-function PlayerUnavailable({ movie, retry }: { movie: Movie; retry: () => void }) { return <div className="player-fallback"><div className="fallback-icon"><MonitorPlay /></div><div className="section-kicker">PLAYER UNAVAILABLE</div><h2>We can’t load this player right now.</h2><p>The external provider may not support this ID or could be unavailable. Iframe errors are not reliably exposed to this page.</p><div className="fallback-actions"><button className="button button-outline" onClick={retry}>Reload player</button><Link className="button button-primary" to={`/movie/${movie.id}`}>Movie details</Link></div></div> }
 
-function EpisodeWatchPage() { const { id, seasonNumber, episodeNumber } = useParams(); usePageMeta('TV Episode Playback Options | AAK Movies', 'TV episode playback is unavailable until a provider-specific episode mapping is configured.'); return <div className="page-wrap"><div className="empty-state tv-playback-empty"><div className="fallback-icon"><MonitorPlay /></div><div className="section-kicker">TV EPISODE</div><h3>No TV playback provider is mapped.</h3><p>TMDB show IDs and episode numbers are metadata. A provider-specific mapping must be explicitly configured before playback can be offered. Nothing has been sent to the movie iframe endpoint.</p><Link className="button button-outline" to={`/tv/${id}/season/${seasonNumber}`}>Back to episode list · Episode {episodeNumber}</Link></div></div> }
+function PlayerChoices({ selected, onChange }: { selected: 'nxsha' | 'universal'; onChange: (value: 'nxsha' | 'universal') => void }) {
+  return <div className="player-choices" role="group" aria-label="Choose a player">
+    <button className={selected === 'nxsha' ? 'selected' : ''} aria-pressed={selected === 'nxsha'} onClick={() => onChange('nxsha')}><MonitorPlay size={16} /><span>Nxsha Player</span><small>Default</small></button>
+    <button className={selected === 'universal' ? 'selected' : ''} aria-pressed={selected === 'universal'} onClick={() => onChange('universal')}><FileVideo2Icon /><span>Universal Player</span><small>Direct Video + Built-in Sources</small></button>
+  </div>
+}
+
+function FileVideo2Icon() { return <span className="file-video-icon" aria-hidden="true">MP4</span> }
+
+function ExternalIframePlayer({ src, title }: { src: string; title: string }) {
+  const [manualFallback, setManualFallback] = useState(false)
+  const [frameLoaded, setFrameLoaded] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  useEffect(() => { setManualFallback(false); setFrameLoaded(false) }, [src, attempt])
+  return <section className="external-player">
+    <div className="player-frame">{manualFallback ? <div className="player-fallback"><div className="fallback-icon"><MonitorPlay /></div><div className="section-kicker">EXTERNAL PLAYER</div><h2>The provider frame may be unavailable.</h2><p>This player is unverified. Browser iframe errors and actual playback state are not reliably detectable.</p><div className="fallback-actions"><button className="button button-outline" onClick={() => setAttempt(value => value + 1)}>Retry player</button><a className="button button-primary" href={src} target="_blank" rel="noreferrer">Open provider</a></div></div> : <><iframe key={attempt} title={title} src={src} loading="eager" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="no-referrer" onLoad={() => setFrameLoaded(true)} /><div className="player-note"><span><LockKeyhole size={13} /> {nxshaPlaybackSource.name} · external iframe · unverified</span><button onClick={() => setManualFallback(true)}>Player not loading?</button></div>{!frameLoaded && <div className="iframe-loading" role="status"><div className="loading-spinner" /><span>Connecting to external player…</span></div>}</>}</div>
+    <p className="player-disclaimer">A loaded iframe does not confirm that a video is playable. Provider permission, ID support, mobile behavior, and playback remain unverified. The browser does not reliably report iframe playback failures.</p>
+  </section>
+}
+
+function EpisodeWatchPage() {
+  const { id, seasonNumber, episodeNumber } = useParams()
+  const navigate = useNavigate()
+  const showId = Number(id)
+  const seasonNo = Number(seasonNumber)
+  const episodeNo = Number(episodeNumber)
+  const [show, setShow] = useState<TvDetails | null>(null)
+  const [episodes, setEpisodes] = useState<TvEpisode[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  const [player, setPlayer] = useState<'nxsha' | 'universal'>('nxsha')
+  const [seasonSwitching, setSeasonSwitching] = useState(false)
+  const [seasonError, setSeasonError] = useState('')
+  const target: PlaybackTarget | null = Number.isSafeInteger(showId) && showId > 0 && Number.isSafeInteger(seasonNo) && seasonNo >= 0 && Number.isSafeInteger(episodeNo) && episodeNo > 0
+    ? { media_type: 'tv', id: showId, season_number: seasonNo, episode_number: episodeNo } : null
+  const url = target ? getExternalPlayerUrl(nxshaPlaybackSource, target) : null
+  const episode = episodes.find(item => item.episode_number === episodeNo && item.season_number === seasonNo)
+  usePageMeta(show && episode ? `${show.title} S${seasonNo}E${episodeNo} — Watch episode | AAK Movies` : 'TV Episode Player | AAK Movies', episode?.overview || 'TV episode playback choices and episode information.')
+  useEffect(() => {
+    let active = true
+    setLoading(true); setError(''); setSeasonError(''); setPlayer('nxsha')
+    if (!Number.isSafeInteger(showId) || showId <= 0 || !Number.isSafeInteger(seasonNo) || seasonNo < 0 || !Number.isSafeInteger(episodeNo) || episodeNo <= 0) {
+      setError('This TV show, season, or episode number is invalid.'); setLoading(false)
+      return () => { active = false }
+    }
+    Promise.all([getTvDetails(showId), getTvSeason(showId, seasonNo)]).then(([series, items]) => { if (active) { setShow(series); setEpisodes(items) } }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : 'Episode information is unavailable.') }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [showId, seasonNo, episodeNo, attempt])
+  const changeSeason = async (value: string) => {
+    const nextSeason = Number(value)
+    if (!Number.isSafeInteger(nextSeason) || nextSeason < 0) return
+    setSeasonSwitching(true); setSeasonError('')
+    try {
+      const nextEpisodes = await getTvSeason(showId, nextSeason)
+      if (!nextEpisodes.length) throw new Error('TMDB has not listed episodes for this season.')
+      navigate(`/watch/tv/${showId}/${nextSeason}/${nextEpisodes[0].episode_number}`)
+    } catch (cause) { setSeasonError(cause instanceof Error ? cause.message : 'Could not load that season.') }
+    finally { setSeasonSwitching(false) }
+  }
+  if (loading) return <PageState loading />
+  if (error) return <PageState error={error} onRetry={() => setAttempt(value => value + 1)} />
+  if (!show || !episode || !url) return <PageState error="TMDB did not return this episode for the selected season." onRetry={() => setAttempt(value => value + 1)} />
+  const episodeIndex = episodes.findIndex(item => item.episode_number === episodeNo)
+  const previous = episodeIndex > 0 ? episodes[episodeIndex - 1] : undefined
+  const next = episodeIndex >= 0 && episodeIndex < episodes.length - 1 ? episodes[episodeIndex + 1] : undefined
+  const seasons = show.seasons.filter(item => item.season_number >= 0)
+  return <div className="watch-page episode-watch-page">
+    <div className="watch-top"><Link to={`/tv/${show.id}/season/${seasonNo}`} className="back-link"><ArrowLeft size={14} /> Back to season</Link><span className="watch-title">TV EPISODE <i /> {show.title}</span></div>
+    <div className="episode-watch-heading"><div className="section-kicker">{show.title} · SEASON {seasonNo} · EPISODE {episodeNo}</div><h1>{episode.name || `Episode ${episodeNo}`}</h1><p>{episode.overview || 'No episode synopsis is available from TMDB.'}</p>{episode.air_date && <small>First aired {episode.air_date}{episode.runtime ? ` · ${episode.runtime} min` : ''}</small>}</div>
+    <div className="episode-selectors"><label>Season<select value={seasonNo} onChange={event => void changeSeason(event.target.value)} disabled={seasonSwitching} aria-label="Choose TV season">{seasons.map(item => <option value={item.season_number} key={item.id}>{item.name || `Season ${item.season_number}`}</option>)}</select></label><label>Episode<select value={episodeNo} onChange={event => navigate(`/watch/tv/${show.id}/${seasonNo}/${Number(event.target.value)}`)} aria-label="Choose TV episode">{episodes.map(item => <option value={item.episode_number} key={item.id}>{String(item.episode_number).padStart(2, '0')} · {item.name || `Episode ${item.episode_number}`}</option>)}</select></label>{seasonSwitching && <span role="status">Loading season…</span>}</div>
+    {seasonError && <p role="alert" className="form-error">{seasonError}</p>}
+    <PlayerChoices selected={player} onChange={setPlayer} />
+    <div className="watch-player-content">{player === 'nxsha' ? <ExternalIframePlayer key={url} title={`${nxshaPlaybackSource.name} player for ${show.title}, season ${seasonNo}, episode ${episodeNo}`} src={url} /> : <UniversalPlayerPanel contextLabel={`${show.title} S${seasonNo}E${episodeNo}`} />}</div>
+    <nav className="episode-neighbors" aria-label="Episode navigation">{previous ? <Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${previous.episode_number}`}><ArrowLeft size={14} /> Previous · E{previous.episode_number}</Link> : <span />}{next ? <Link className="button button-outline" to={`/watch/tv/${show.id}/${seasonNo}/${next.episode_number}`}>Next · E{next.episode_number} <ArrowRight size={14} /></Link> : <span />}</nav>
+    <div className="watch-information"><div><div className="section-kicker">TV SERIES</div><h1>{show.title}</h1><p>Season {seasonNo} <i /> Episode {episodeNo}</p></div><Link className="button button-quiet" to={`/tv/${show.id}`}>Series details <ArrowRight size={15} /></Link></div>
+  </div>
+}
 
 function DirectPlayer() {
-  const [url, setUrl] = useState(''); const [title, setTitle] = useState('My video'); const [error, setError] = useState(''); const [mediaError, setMediaError] = useState(''); const [source, setSource] = useState<DirectMediaSource | null>(null)
-  usePageMeta('Personal Direct Video Player | AAK Movies', 'Play a direct HTTPS MP4, WebM, or Ogg media file that you are authorized to access.')
-  const play = () => { setError(''); setMediaError(''); try { const parsed = new URL(url); if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new Error('Use a secure HTTPS direct video URL without embedded credentials.'); const ext = parsed.pathname.toLowerCase().split('.').pop(); const type = ext === 'webm' ? 'video/webm' : ext === 'ogg' || ext === 'ogv' ? 'video/ogg' : ext === 'mp4' || ext === 'm4v' ? 'video/mp4' : null; if (!type) throw new Error('Use a direct MP4, WebM, or Ogg file URL. A webpage, iframe embed, torrent, or manifest URL is not a direct video file.'); setSource({ url: parsed.href, contentType: type }) } catch (e) { setSource(null); setError(e instanceof Error ? e.message : 'Please enter a valid direct media URL.') } }
-  return <div className="page-wrap direct-player-page"><div className="page-intro"><div className="section-kicker">PERSONAL PLAYER</div><h1>Bring your <em>own video.</em></h1><p>Play a direct, authorized video file in the native AAK Movies player.</p></div><div className="profile-panel direct-player-panel"><label>Video title<input className="admin-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Video title" /></label><label>Direct video URL<input className="admin-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com/video.mp4" type="url" /></label><button className="button button-primary" onClick={play}><Play size={16} fill="currentColor" /> Play video</button>{error && <p role="alert" className="form-error">{error}</p>}{source && <div className="native-player-wrap"><NativeVideoPlayer source={source} title={title || 'Video'} onError={() => setMediaError('This media could not be played. Check that the URL is a direct, supported file and that the host permits access.')} /></div>}{mediaError && <p role="alert" className="form-error">{mediaError}</p>}<p className="player-disclaimer">Only use URLs you are authorized to access. A webpage, iframe embed, torrent, or manifest is not a direct video file. Playback also depends on the host’s media and CORS settings.</p></div></div>
+  usePageMeta('Universal Video Player | AAK Movies', 'Play an authorized direct HTTPS MP4, WebM, or Ogg video and inspect registered manifest metadata.')
+  return <div className="page-wrap direct-player-page"><div className="page-intro"><div className="section-kicker">UNIVERSAL PLAYER</div><h1>Bring your <em>own video.</em></h1><p>Play a direct, authorized video file or inspect the built-in source declarations.</p></div><UniversalPlayerPanel /></div>
 }
 
 type ManifestRecord = { url: string; name: string; id: string; resources: string[]; types: string[] }
 function readManifestStore(): ManifestRecord[] { try { const value: unknown = JSON.parse(localStorage.getItem('aak-movies-manifests') || '[]'); return Array.isArray(value) ? value.filter(isManifestRecord) : [] } catch { return [] } }
 function isManifestRecord(value: unknown): value is ManifestRecord { if (!value || typeof value !== 'object') return false; const v = value as Partial<ManifestRecord>; return typeof v.url === 'string' && typeof v.name === 'string' && typeof v.id === 'string' && Array.isArray(v.resources) && Array.isArray(v.types) }
+function isStringArray(value: unknown): value is string[] { return Array.isArray(value) && value.every(item => typeof item === 'string') }
+function isManifestResource(value: unknown): value is StremioResource {
+  if (typeof value === 'string') return value.trim().length > 0
+  if (!value || typeof value !== 'object') return false
+  const resource = value as Record<string, unknown>
+  return typeof resource.name === 'string' && resource.name.trim().length > 0
+    && (resource.types === undefined || isStringArray(resource.types))
+    && (resource.idPrefixes === undefined || isStringArray(resource.idPrefixes))
+}
 function ManifestManager() {
   const [url, setUrl] = useState(''); const [items, setItems] = useState<ManifestRecord[]>(readManifestStore); const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false)
   usePageMeta('Manifest Registry | AAK Movies', 'Register and inspect user-supplied Stremio-compatible addon manifests. This registry does not resolve streams.')
@@ -186,23 +359,23 @@ function ManifestManager() {
       const data: unknown = await response.json()
       if (!data || typeof data !== 'object') throw new Error('Response is not a manifest object.')
       const manifest = data as Record<string, unknown>
-      if (typeof manifest.name !== 'string' || !manifest.name.trim() || typeof manifest.id !== 'string' || !manifest.id.trim() || !Array.isArray(manifest.resources) || !manifest.resources.every((item: unknown) => typeof item === 'string' || (item && typeof item === 'object' && typeof (item as Record<string, unknown>).name === 'string')) || !Array.isArray(manifest.types) || !manifest.types.every((item: unknown) => typeof item === 'string')) throw new Error('Manifest must declare a name, id, resources, and string types.')
-      const item: ManifestRecord = { url: parsed.href, name: manifest.name, id: manifest.id, resources: (manifest.resources as (string | { name: string })[]).map(resource => typeof resource === 'string' ? resource : resource.name), types: manifest.types as string[] }
+      if (typeof manifest.name !== 'string' || !manifest.name.trim() || typeof manifest.id !== 'string' || !manifest.id.trim() || !Array.isArray(manifest.resources) || !manifest.resources.every(isManifestResource) || !isStringArray(manifest.types)) throw new Error('Manifest must declare a name, id, resources, and string types. Resource types and ID prefixes must also be string arrays when supplied.')
+      const item: ManifestRecord = { url: parsed.href, name: manifest.name, id: manifest.id, resources: (manifest.resources as StremioResource[]).map(describeManifestResource), types: manifest.types }
       const next = [...items.filter(record => record.url !== item.url), item]; setItems(next); localStorage.setItem('aak-movies-manifests', JSON.stringify(next)); setUrl(''); setMessage(`Registered “${item.name}”. This registry does not resolve streams.`)
     } catch (e) { setMessage(`${e instanceof Error ? e.message : 'Could not read this manifest.'} Browser CORS may block direct requests.`) } finally { setBusy(false) }
   }
   const remove = (target: string) => { const next = items.filter(item => item.url !== target); setItems(next); localStorage.setItem('aak-movies-manifests', JSON.stringify(next)) }
-  return <div className="page-wrap sources-page"><div className="page-intro"><div className="section-kicker">PLAYBACK INTEGRATIONS</div><h1>Your <em>sources.</em></h1><p>Register HTTPS Stremio-compatible manifest URLs. This stores declared addon metadata only; it does not resolve streams or torrents.</p></div><div className="profile-panel source-manager"><label htmlFor="manifestUrl">Stremio manifest URL</label><div className="manifest-add-row"><input id="manifestUrl" className="admin-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://addon.example/manifest.json" type="url" /><button className="button button-primary" onClick={addManifest} disabled={busy}>{busy ? 'Checking…' : 'Add manifest'}</button></div>{message && <p role="status" className="manifest-message">{message}</p>}<div className="manifest-list"><h3>Registered manifests ({items.length})</h3>{items.length === 0 && <p>No manifests added yet. Add an HTTPS manifest URL to inspect its declared resources and types.</p>}{items.map(item => <article className="manifest-item" key={item.url}><div><strong>{item.name}</strong><small>{item.id}</small><small>Types: {item.types.join(', ') || 'Not declared'} · Resources: {item.resources.join(', ') || 'Not declared'}</small><code>{item.url}</code></div><button className="button button-outline" onClick={() => remove(item.url)} aria-label={`Remove manifest ${item.name}`}>Remove</button></article>)}</div><p className="player-disclaimer">Manifest URLs are saved in this browser only. CORS may block inspection. Only add manifests you are authorized to access. A manifest is not a playable video URL; no stream resolution is implemented.</p></div></div>
+  return <div className="page-wrap sources-page"><div className="page-intro"><div className="section-kicker">PLAYBACK INTEGRATIONS</div><h1>Your <em>sources.</em></h1><p>Register HTTPS Stremio-compatible manifest URLs. This stores declared addon metadata only; it does not resolve streams or torrents.</p></div><div className="profile-panel source-manager"><div className="manifest-list builtin-registry"><h3>Built-in manifest declarations</h3><p>Loaded from the two manifest JSON files you supplied. Endpoint URLs and signatures are not included in this registry.</p>{builtInManifests.map(manifest => <article className="manifest-item builtin-registry-item" key={manifest.id}><div><strong>{manifest.name} <small>v{manifest.version}</small></strong><small>{manifest.id}</small><small>Types: {manifest.types.join(', ')}</small><small>Resources: {manifest.resources.map(resource => `${resource.name}${resource.types ? ` (${resource.types.join(', ')})` : ''}${resource.idPrefixes ? ` [IDs: ${resource.idPrefixes.join(', ')}]` : ''}`).join(', ')}</small><small>ID prefixes: {manifest.idPrefixes.join(', ') || 'Not declared'} · Catalogs: {manifest.catalogs}</small><small>Configurable: {manifest.configurable ? 'yes' : 'no'} · Configuration required: {manifest.configurationRequired === undefined ? 'not stated' : manifest.configurationRequired ? 'yes' : 'no'}</small><small>Stream lookup: disabled pending a usable endpoint and authorization review.</small></div></article>)}</div><label htmlFor="manifestUrl">Stremio manifest URL</label><div className="manifest-add-row"><input id="manifestUrl" className="admin-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://addon.example/manifest.json" type="url" /><button className="button button-primary" onClick={addManifest} disabled={busy}>{busy ? 'Checking…' : 'Add manifest'}</button></div>{message && <p role="status" className="manifest-message">{message}</p>}<div className="manifest-list"><h3>Registered manifests ({items.length})</h3>{items.length === 0 && <p>No manifests added yet. Add an HTTPS manifest URL to inspect its declared resources and types.</p>}{items.map(item => <article className="manifest-item" key={item.url}><div><strong>{item.name}</strong><small>{item.id}</small><small>Types: {item.types.join(', ') || 'Not declared'} · Resources: {item.resources.join(', ') || 'Not declared'}</small><code>{item.url}</code></div><button className="button button-outline" onClick={() => remove(item.url)} aria-label={`Remove manifest ${item.name}`}>Remove</button></article>)}</div><p className="player-disclaimer">Manifest URLs are saved in this browser only. CORS may block inspection. Only add manifests you are authorized to access. A manifest is not a playable video URL; no stream resolution is implemented.</p></div></div>
 }
 
 function LibraryPage({ saved, toggleSaved }: { saved: Media[]; toggleSaved: (item: Media) => void }) { usePageMeta('My Library | AAK Movies', 'Your locally saved AAK Movies watchlist.'); return <div className="page-wrap library-page"><div className="page-intro"><div className="section-kicker">YOUR PERSONAL COLLECTION</div><h1>My <em>library.</em></h1><p>Keep movies and series you love close.</p></div><div className="library-persistence"><LockKeyhole size={14} /><span>Your saved titles last for this visit. Sign-in sync is not configured.</span></div>{saved.length ? <div className="discover-grid">{saved.map(item => <MediaCard item={item} saved toggleSaved={toggleSaved} key={mediaKey(item)} />)}</div> : <div className="empty-state library-empty"><div className="library-empty-icon"><Bookmark /></div><div className="section-kicker">A LITTLE ROOM FOR LATER</div><h3>Your watchlist is waiting.</h3><p>Save movies and series as you discover them and they’ll find a place here.</p><Link to="/discover" className="button button-primary">Explore titles <ArrowRight size={15} /></Link></div>}</div> }
 function Profile() { usePageMeta('Profile & Preferences | AAK Movies', 'Profile and viewing preferences for AAK Movies.'); return <div className="page-wrap profile-page"><div className="page-intro"><div className="section-kicker">YOUR AAK MOVIES</div><h1>Make it <em>yours.</em></h1><p>A personal space for saved films and viewing settings.</p></div><div className="profile-panel"><div className="profile-heading"><div className="profile-avatar">A</div><div><h2>Welcome to AAK Movies</h2><p>Account sign-in is not connected in this demo.</p></div></div><div className="panel-divider" /><div className="settings-list"><div><div className="setting-icon"><Heart size={17} /></div><div><strong>Personal recommendations</strong><p>Available when account support is connected.</p></div></div><div><div className="setting-icon"><Settings size={17} /></div><div><strong>Viewing preferences</strong><p>Language and subtitle preferences are not stored yet.</p></div></div><div><div className="setting-icon"><ShieldCheck size={17} /></div><div><strong>Privacy & data</strong><p>Understand how your data is handled.</p></div><Link to="/privacy" className="subtle-link">Read policy <ArrowRight size={13} /></Link></div></div></div></div> }
-function Admin() { usePageMeta('Admin Dashboard | AAK Movies', 'Administration shell for AAK Movies. Protected server-side admin access is not configured.'); return <div className="page-wrap admin-page"><div className="page-intro"><div className="section-kicker"><ShieldCheck size={13} /> ADMINISTRATION</div><h1>Curate with <em>care.</em></h1><p>Manage permitted metadata and provider references.</p></div><div className="admin-alert"><LockKeyhole size={18} /><div><strong>Admin access is not configured.</strong><p>This is a dashboard shell. Add server-verified roles before enabling writes.</p></div></div><div className="admin-table"><div className="table-heading"><div><div className="section-kicker">CONTENT MANAGEMENT</div><h3>Playback source registry</h3></div><Link to="/sources" className="button button-outline">Open manifest registry</Link></div><p className="admin-footnote">Nxsha is an external movie iframe source. TV playback requires a separate provider-specific ID mapping; none is configured.</p></div></div> }
+function Admin() { usePageMeta('Admin Dashboard | AAK Movies', 'Administration shell for AAK Movies. Protected server-side admin access is not configured.'); return <div className="page-wrap admin-page"><div className="page-intro"><div className="section-kicker"><ShieldCheck size={13} /> ADMINISTRATION</div><h1>Curate with <em>care.</em></h1><p>Manage permitted metadata and provider references.</p></div><div className="admin-alert"><LockKeyhole size={18} /><div><strong>Admin access is not configured.</strong><p>This is a dashboard shell. Add server-verified roles before enabling writes.</p></div></div><div className="admin-table"><div className="table-heading"><div><div className="section-kicker">CONTENT MANAGEMENT</div><h3>Playback source registry</h3></div><Link to="/sources" className="button button-outline">Open manifest registry</Link></div><p className="admin-footnote">Nxsha has explicit movie and TV episode URL mappings. Provider permission, supported IDs, and playback remain unverified.</p></div></div> }
 
 function Trailer({ title, videoKey }: { title: string; videoKey: string }) { return <div className="trailer-frame"><iframe title={`${title} trailer`} src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoKey)}`} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div> }
 function CastList({ names }: { names: string[] }) { return <section className="cast-section"><div className="section-kicker">THE PEOPLE IN THE STORY</div><h3>Cast</h3><div className="cast-list">{names.map((name, index) => <div className="cast-person" key={`${name}-${index}`}><span>{name.slice(0, 1)}</span><strong>{name}</strong></div>)}</div></section> }
 function Fact({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div> }
-function PageState({ loading = false, error }: { loading?: boolean; error?: string }) { return <div className="page-wrap"><div className="empty-state" role={error ? 'alert' : 'status'}>{loading ? <div className="loading-spinner" aria-label="Loading" /> : <Info />}<h3>{loading ? 'Loading title details…' : 'We couldn’t load this title.'}</h3>{error && <p>{error}</p>}<Link className="button button-outline" to="/discover">Back to discover</Link></div></div> }
+function PageState({ loading = false, error, onRetry }: { loading?: boolean; error?: string; onRetry?: () => void }) { return <div className="page-wrap"><div className="empty-state" role={error ? 'alert' : 'status'}>{loading ? <div className="loading-spinner" aria-label="Loading" /> : <Info />}<h3>{loading ? 'Loading title details…' : 'We couldn’t load this title.'}</h3>{error && <p>{error}</p>}{onRetry && <button className="button button-primary" onClick={onRetry}>Try again</button>}<Link className="button button-outline" to="/discover">Back to discover</Link></div></div> }
 function InfoPage({ title, kicker, text }: { title: string; kicker: string; text: string }) { usePageMeta(`${kicker} | AAK Movies`, text); return <div className="info-page"><div className="info-symbol"><Clapperboard /></div><div className="section-kicker">{kicker}</div><h1>{title}</h1><p>{text}</p><Link to="/discover" className="button button-outline">Explore movies & series <ArrowRight size={15} /></Link></div> }
 function Policy({ title, kicker, text }: { title: string; kicker: string; text: string }) { usePageMeta(`${title} | AAK Movies`, text); return <div className="page-wrap policy-page"><Link to="/" className="back-link"><ArrowLeft size={14} /> Back home</Link><div className="section-kicker">{kicker}</div><h1>{title}</h1><div className="policy-copy"><p>{text}</p><h3>Questions?</h3><p>Use the published AAK Movies contact address for questions about this policy.</p></div></div> }
 function Footer() { return <footer className="site-footer"><div className="footer-main"><div className="footer-brand"><Link className="brand" to="/"><span className="brand-logo-plate"><img src="/images/aak-movies-logo.png" alt="" /></span><span>AAK Movies</span></Link><p>Cinema, considered.</p><div className="social-links"><a href="https://instagram.com" aria-label="Instagram"><Instagram size={16} /></a><a href="https://twitter.com" aria-label="Twitter"><Twitter size={16} /></a><a href="mailto:contact@example.org" aria-label="Contact by email"><Mail size={16} /></a></div></div><div className="footer-column"><span>EXPLORE</span><Link to="/discover">Discover</Link><Link to="/library">My library</Link><Link to="/about">Our story</Link></div><div className="footer-column"><span>INFORMATION</span><Link to="/contact">Contact</Link><Link to="/privacy">Privacy</Link><Link to="/terms">Terms</Link><Link to="/copyright">Copyright & removal</Link><Link to="/sources">Manifest registry</Link></div><div className="footer-note"><span>MADE FOR FILM LOVERS</span><p>A little more intention.<br />A lot more imagination.</p><span className="footer-spark">✳</span></div></div><div className="footer-bottom"><span>© 2026 AAK Movies. All rights reserved.</span><span>Film and TV information provided by <strong>TMDB</strong>. This product uses the TMDB API but is not endorsed or certified by TMDB.</span><Link to="/admin">Admin</Link></div></footer> }

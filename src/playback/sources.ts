@@ -1,21 +1,30 @@
-import type { Media } from '../data'
+/** A provider-specific playback identity. TMDB movie and TV IDs stay distinct. */
+export type PlaybackTarget =
+  | { media_type: 'movie'; id: number }
+  | { media_type: 'tv'; id: number; season_number: number; episode_number: number }
 
-/** External providers generate embed-page URLs; they are never treated as media streams. */
+/** External providers generate embed pages; they are never treated as video streams. */
 export type ExternalPlaybackSource = {
   name: string
-  mapMediaId: (media: Media) => string | null
-  buildUrl: (providerId: string) => string
+  buildUrl: (target: PlaybackTarget) => string | null
+}
+
+function validPositiveId(value: number) {
+  return Number.isSafeInteger(value) && value > 0
 }
 
 export const nxshaPlaybackSource: ExternalPlaybackSource = {
   name: 'Nxsha',
-  // Explicitly movie-only. This configured template uses the TMDB movie ID as its provider ID;
-  // provider acceptance remains unverified. TV IDs are never sent to this movie endpoint.
-  mapMediaId: media => media.media_type === 'movie' ? String(media.id) : null,
-  buildUrl: providerId => `https://web.nxsha.app/embed/movie/${encodeURIComponent(providerId)}?color=orange`,
+  buildUrl: target => {
+    if (!validPositiveId(target.id)) return null
+    if (target.media_type === 'movie') {
+      return `https://web.nxsha.app/embed/movie/${target.id}?color=orange`
+    }
+    if (!Number.isSafeInteger(target.season_number) || target.season_number < 0 || !validPositiveId(target.episode_number)) return null
+    return `https://web.nxsha.app/embed/tv/${target.id}/${target.season_number}/${target.episode_number}`
+  },
 }
 
-export function getExternalPlayerUrl(source: ExternalPlaybackSource, media: Media): string | null {
-  const providerId = source.mapMediaId(media)
-  return providerId ? source.buildUrl(providerId) : null
+export function getExternalPlayerUrl(source: ExternalPlaybackSource, target: PlaybackTarget): string | null {
+  return source.buildUrl(target)
 }
