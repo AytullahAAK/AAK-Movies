@@ -47,19 +47,34 @@ function getConfiguredManifestUrl(provider: Provider, env: AddonEnv): URL | null
   return url
 }
 
-function manifestSupports(manifest: Record<string, unknown>, mediaType: MediaType, requestedId: string) {
+function getStreamResource(manifest: Record<string, unknown>) {
+  return readArray(manifest.resources).find((resource): resource is StremioResource => typeof resource === 'string' ? resource === 'stream' : isRecord(resource) && resource.name === 'stream')
+}
+
+function getStreamIdPrefixes(manifest: Record<string, unknown>, streamResource: StremioResource) {
+  const resourcePrefixes = typeof streamResource === 'object' && !Array.isArray(streamResource)
+    ? readArray(streamResource.idPrefixes).filter((prefix): prefix is string => typeof prefix === 'string')
+    : []
+  const manifestPrefixes = readArray(manifest.idPrefixes).filter((prefix): prefix is string => typeof prefix === 'string')
+  return resourcePrefixes.length ? resourcePrefixes : manifestPrefixes
+}
+
+function manifestSupportsType(manifest: Record<string, unknown>, mediaType: MediaType) {
   const stremioType = mediaType === 'movie' ? 'movie' : 'series'
   if (!readArray(manifest.types).includes(stremioType)) return false
-  const streamResource = readArray(manifest.resources).find((resource): resource is StremioResource => typeof resource === 'string' ? resource === 'stream' : isRecord(resource) && resource.name === 'stream')
+  const streamResource = getStreamResource(manifest)
   if (!streamResource) return false
   const declaredTypes = typeof streamResource === 'object' && !Array.isArray(streamResource) ? readArray(streamResource.types) : []
-  if (declaredTypes.length && !declaredTypes.includes(stremioType)) return false
-  const declaredPrefixes = typeof streamResource === 'object' && !Array.isArray(streamResource)
-    ? readArray(streamResource.idPrefixes)
-    : readArray(manifest.idPrefixes)
+  return !declaredTypes.length || declaredTypes.includes(stremioType)
+}
+
+function manifestSupports(manifest: Record<string, unknown>, mediaType: MediaType, requestedId: string) {
+  if (!manifestSupportsType(manifest, mediaType)) return false
+  const streamResource = getStreamResource(manifest)
+  if (!streamResource) return false
+  const declaredPrefixes = getStreamIdPrefixes(manifest, streamResource)
   if (!declaredPrefixes.length) return true
-  const baseId = requestedId.split(':', 1)[0]
-  return declaredPrefixes.some(prefix => typeof prefix === 'string' && baseId.startsWith(prefix))
+  return declaredPrefixes.some(prefix => typeof prefix === 'string' && requestedId.startsWith(prefix))
 }
 
 function classifyStream(value: Record<string, unknown>, embedHosts: Set<string>) {
@@ -93,7 +108,6 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
       const manifestConfigured = getConfiguredManifestUrl(provider, env) !== null
       const missing = ['ENABLE_AUTHORIZED_ADDON_LOOKUPS=true']
       if (!manifestConfigured) missing.push(`a valid ${manifestVariable}`)
-      if (!env.TMDB_READ_ACCESS_TOKEN) missing.push('TMDB_READ_ACCESS_TOKEN')
       send(response, 503, { code: 'ADDON_LOOKUP_NOT_CONFIGURED', provider, required: missing, message: `${provider === 'torrentio' ? 'Torrentio' : 'HdHub'} lookups are disabled. The operator must review provider permissions and configure ${missing.join(', ')} on the server.` })
       return
     }
@@ -116,25 +130,37 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
     if (mediaType === 'tv' && (!seasonNumberParam?.trim() || !episodeNumberParam?.trim() || !Number.isSafeInteger(seasonNumber) || seasonNumber < 0 || !Number.isSafeInteger(episodeNumber) || episodeNumber <= 0)) {
       send(response, 400, { message: 'TV lookups require a non-negative season number and a positive episode number.' }); return
     }
-    const tmdbToken = env.TMDB_READ_ACCESS_TOKEN
-    if (!tmdbToken) { send(response, 503, { code: 'TMDB_TOKEN_NOT_CONFIGURED', provider, required: ['TMDB_READ_ACCESS_TOKEN'], message: 'TMDB_READ_ACCESS_TOKEN is required to map this TMDB title to an addon-supported IMDb ID.' }); return }
-
     try {
-      const idPath = mediaType === 'movie' ? `/movie/${tmdbId}/external_ids` : `/tv/${tmdbId}/external_ids`
-      const externalResponse = await fetch(`https://api.themoviedb.org/3${idPath}`, {
-        headers: { Authorization: `Bearer ${tmdbToken}`, Accept: 'application/json' },
-        signal: AbortSignal.timeout(10000),
-      })
-      const externalIds = await readJson(externalResponse)
-      const imdbId = isRecord(externalIds) && typeof externalIds.imdb_id === 'string' && /^tt\d+$/.test(externalIds.imdb_id) ? externalIds.imdb_id : null
-      if (!imdbId) { send(response, 422, { message: 'TMDB did not provide an IMDb ID supported by this addon.' }); return }
       const stremioType = mediaType === 'movie' ? 'movie' : 'series'
-      const videoId = mediaType === 'movie' ? imdbId : `${imdbId}:${seasonNumber}:${episodeNumber}`
-
       const manifestResponse = await fetch(manifestUrl, { headers: { Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(10000) })
       const manifestValue = await readJson(manifestResponse)
       if (!isRecord(manifestValue) || !Array.isArray(manifestValue.types) || !Array.isArray(manifestValue.resources)) throw new Error('Addon manifest is missing required types/resources.')
-      if (!manifestSupports(manifestValue, mediaType, videoId)) { send(response, 422, { message: 'This addon manifest does not declare stream support for the selected media type and ID.' }); return }
+      const streamResource = getStreamResource(manifestValue)
+      if (!streamResource) { send(response, 422, { message: 'This addon manifest does not declare a stream resource.' }); return }
+      const declaredPrefixes = getStreamIdPrefixes(manifestValue, streamResource)
+      if (!manifestSupportsType(manifestValue, mediaType)) { send(response, 422, { message: 'This addon manifest does not declare stream support for the selected media type.' }); return }
+
+      const acceptsImdb = !declaredPrefixes.length || declaredPrefixes.some(prefix => prefix === 'tt')
+      const acceptsTmdb = declaredPrefixes.some(prefix => prefix === 'tmdb:')
+      let baseId: string | null = null
+      if (acceptsImdb && env.TMDB_READ_ACCESS_TOKEN) {
+        const idPath = mediaType === 'movie' ? `/movie/${tmdbId}/external_ids` : `/tv/${tmdbId}/external_ids`
+        const externalResponse = await fetch(`https://api.themoviedb.org/3${idPath}`, {
+          headers: { Authorization: `Bearer ${env.TMDB_READ_ACCESS_TOKEN}`, Accept: 'application/json' },
+          signal: AbortSignal.timeout(10000),
+        })
+        const externalIds = await readJson(externalResponse)
+        const imdbId = isRecord(externalIds) && typeof externalIds.imdb_id === 'string' && /^tt\d+$/.test(externalIds.imdb_id) ? externalIds.imdb_id : null
+        if (imdbId) baseId = imdbId
+      }
+      if (!baseId && acceptsTmdb) baseId = `tmdb:${tmdbId}`
+      if (!baseId && acceptsImdb && !env.TMDB_READ_ACCESS_TOKEN) {
+        send(response, 503, { code: 'TMDB_TOKEN_NOT_CONFIGURED', provider, required: ['TMDB_READ_ACCESS_TOKEN'], message: 'TMDB_READ_ACCESS_TOKEN is required to map this TMDB title to the addon’s IMDb ID format.' })
+        return
+      }
+      if (!baseId) { send(response, 422, { message: 'TMDB could not provide an ID declared by this addon manifest.' }); return }
+      const videoId = mediaType === 'movie' ? baseId : `${baseId}:${seasonNumber}:${episodeNumber}`
+      if (!manifestSupports(manifestValue, mediaType, videoId)) { send(response, 422, { message: 'This addon manifest does not declare support for the selected ID prefix.' }); return }
 
       const streamUrl = new URL(manifestUrl.href)
       // IDs are constrained above to IMDb digits plus numeric episode suffixes.

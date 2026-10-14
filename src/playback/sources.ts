@@ -25,6 +25,18 @@ export const nxshaPlaybackSource: ExternalPlaybackSource = {
   },
 }
 
+export const vidlovePlaybackSource: ExternalPlaybackSource = {
+  name: 'Vidlove',
+  buildUrl: target => {
+    if (!validPositiveId(target.id)) return null
+    if (target.media_type === 'movie') {
+      return `https://player.vidlove.cc/embed/movie/${target.id}?`
+    }
+    if (!Number.isSafeInteger(target.season_number) || target.season_number < 0 || !validPositiveId(target.episode_number)) return null
+    return `https://player.vidlove.cc/embed/tv/${target.id}/${target.season_number}/${target.episode_number}?`
+  },
+}
+
 export function getExternalPlayerUrl(source: ExternalPlaybackSource, target: PlaybackTarget): string | null {
   return source.buildUrl(target)
 }

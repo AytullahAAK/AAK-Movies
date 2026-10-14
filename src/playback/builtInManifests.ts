@@ -30,6 +30,11 @@ export function describeManifestResource(resource: StremioResource) {
   return `${resource.name}${types}${prefixes}`
 }
 
+export function getManifestIdPrefixes(manifest: Pick<BuiltInManifest, 'idPrefixes' | 'resources'>) {
+  const resourcePrefixes = manifest.resources.flatMap(resource => resource.idPrefixes ?? [])
+  return [...new Set(resourcePrefixes.length ? resourcePrefixes : manifest.idPrefixes)]
+}
+
 export const builtInManifests: BuiltInManifest[] = [
   {
     id: 'com.stremio.torrentio.addon',

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, FileVideo2 } from 'lucide-react'
-import { builtInManifests, describeManifestResource } from './builtInManifests'
+import { builtInManifests, describeManifestResource, getManifestIdPrefixes } from './builtInManifests'
 import { NativeVideoPlayer, type DirectMediaSource } from './NativeVideoPlayer'
 import { FullscreenButton } from './FullscreenButton'
 import { getProgressKey, readWatchProgress, saveWatchProgress, removeWatchProgress, type WatchProgressContext } from './watchProgress'
@@ -153,11 +153,24 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
     }
   }
 
+  const testWithSampleVideo = async () => {
+    if (!import.meta.env.DEV) return
+    const { mdnFlowerSample } = await import('./devSampleVideo')
+    setMediaError('')
+    setEmbedSource(null)
+    setExternalSource(null)
+    setTitle(mdnFlowerSample.title)
+    setSource(mdnFlowerSample.source)
+    setPlayerKey(key => key + 1)
+  }
+
   return <section className="universal-player" aria-label="Universal Player">
     <div className="universal-heading">
       <div><div className="section-kicker">TORRENT</div><h2>Addon sources</h2></div>
       <span className="source-kind"><FileVideo2 size={15} /> One player interface</span>
     </div>
+
+    {import.meta.env.DEV && <button type="button" className="button button-outline" onClick={() => void testWithSampleVideo()}>Test with sample video</button>}
 
     {mediaContext && <p className="universal-context" role="status">{mediaContext.title} · {mediaContext.media_type === 'movie' ? 'Movie' : 'TV series'} · TMDB ID {mediaContext.tmdbId}{mediaContext.media_type === 'tv' && Number.isSafeInteger(mediaContext.seasonNumber) && Number.isSafeInteger(mediaContext.episodeNumber) ? ` · S${mediaContext.seasonNumber}E${mediaContext.episodeNumber}` : ''}</p>}
 
@@ -172,7 +185,7 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
       {builtInManifests.map(manifest => <section className="addon-source-section" key={manifest.id} aria-labelledby={`addon-${manifest.name}`}>
         <div className="addon-source-heading"><div><div className="section-kicker">BUILT-IN ADDON</div><h3 id={`addon-${manifest.name}`}>{manifest.name} Sources</h3></div><span className="addon-source-status">{addonSources[manifest.provider].status === 'loading' ? 'Loading' : addonSources[manifest.provider].status === 'error' ? 'Unavailable' : addonSources[manifest.provider].status === 'ready' ? `${addonSources[manifest.provider].streams.length} sources` : manifest.lookupStatus === 'needs-user-config' ? 'Setup required' : 'Not connected'}</span></div>
         <p>{manifest.lookupMessage}</p>
-        <div className="addon-source-meta"><span>Types: {manifest.types.join(', ')}</span><span>Resources: {manifest.resources.map(describeManifestResource).join(', ')}</span><span>ID prefixes: {manifest.idPrefixes.join(', ') || 'Not declared'}</span></div>
+        <div className="addon-source-meta"><span>Types: {manifest.types.join(', ')}</span><span>Resources: {manifest.resources.map(describeManifestResource).join(', ')}</span><span>ID prefixes: {getManifestIdPrefixes(manifest).join(', ') || 'Not declared'}</span></div>
         {addonSources[manifest.provider].status === 'loading' && <p className="addon-source-pending" role="status">Loading {manifest.name} sources…</p>}
         {addonSources[manifest.provider].status === 'error' && <div className="addon-source-error-wrap"><p className="addon-source-error" role="alert">{addonSources[manifest.provider].message}</p><button type="button" className="button button-outline" onClick={() => setRetryAttempt(value => value + 1)}>Try again</button></div>}
         {addonSources[manifest.provider].status === 'ready' && addonSources[manifest.provider].streams.length === 0 && <p className="addon-source-pending" role="status">No compatible sources found.</p>}

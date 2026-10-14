@@ -11,9 +11,10 @@ async function importTypeScript(path) {
   return import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)
 }
 
-const [{ getExternalPlayerUrl, nxshaPlaybackSource }] = await Promise.all([
+const [{ getExternalPlayerUrl, nxshaPlaybackSource, vidlovePlaybackSource }] = await Promise.all([
   importTypeScript('src/playback/sources.ts'),
 ])
+const { shouldLockLandscapeOnPhone } = await importTypeScript('src/playback/mobileOrientation.ts')
 const { parseDirectMediaUrl } = await importTypeScript('src/playback/directMediaUrl.ts')
 const heroCarousel = await importTypeScript('src/home/heroCarousel.ts')
 const tmdbData = await importTypeScript('src/data.ts')
@@ -22,6 +23,7 @@ const { classifyLiveTvAvailability, createLiveTvHealthHandler, isPublicAddress }
 const { default: tmdbHandler } = await importTypeScript('api/tmdb/proxy.ts')
 const { default: tmdbStatusHandler } = await importTypeScript('api/tmdb/status.ts')
 const { createAddonHandler } = await importTypeScript('api/addons/[provider].ts')
+const { builtInManifests, getManifestIdPrefixes } = await importTypeScript('src/playback/builtInManifests.ts')
 
 function mockResponse() {
   const headers = new Map()
@@ -44,6 +46,23 @@ test('invalid Nxsha movie and episode targets are rejected', () => {
   assert.equal(getExternalPlayerUrl(nxshaPlaybackSource, { media_type: 'movie', id: 0 }), null)
   assert.equal(getExternalPlayerUrl(nxshaPlaybackSource, { media_type: 'tv', id: 1, season_number: -1, episode_number: 1 }), null)
   assert.equal(getExternalPlayerUrl(nxshaPlaybackSource, { media_type: 'tv', id: 1, season_number: 1, episode_number: 0 }), null)
+})
+
+test('Vidlove builds separate movie and TV episode embed URLs from the selected TMDB target', () => {
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'movie', id: 1555 }), 'https://player.vidlove.cc/embed/movie/1555?')
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'tv', id: 1396, season_number: 2, episode_number: 3 }), 'https://player.vidlove.cc/embed/tv/1396/2/3?')
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'tv', id: 1396, season_number: 2, episode_number: 4 }), 'https://player.vidlove.cc/embed/tv/1396/2/4?')
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'tv', id: 1396, season_number: 0, episode_number: 1 }), 'https://player.vidlove.cc/embed/tv/1396/0/1?')
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'movie', id: 0 }), null)
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'tv', id: 1396, season_number: -1, episode_number: 1 }), null)
+  assert.equal(getExternalPlayerUrl(vidlovePlaybackSource, { media_type: 'tv', id: 1396, season_number: 1, episode_number: 0 }), null)
+})
+
+test('fullscreen landscape locking is limited to narrow coarse-pointer mobile devices', () => {
+  assert.equal(shouldLockLandscapeOnPhone(true, true, 390), true)
+  assert.equal(shouldLockLandscapeOnPhone(false, true, 390), false)
+  assert.equal(shouldLockLandscapeOnPhone(true, false, 390), false)
+  assert.equal(shouldLockLandscapeOnPhone(true, true, 1024), false)
 })
 
 test('hero carousel navigation wraps and rejects stale player events', () => {
@@ -202,11 +221,32 @@ test('AAK Player keeps its iframe and fullscreen control without the AAK, Reload
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
   const player = app.slice(app.indexOf('function ExternalIframePlayer('), app.indexOf('function LegacyEpisodeRedirect('))
   assert.match(player, /<iframe title=\{title\} src=\{src\}/)
-  assert.match(player, /<FullscreenButton targetRef=\{playerShell\} hideWhenActive \/>/)
+  assert.match(player, /<FullscreenButton targetRef=\{playerShell\} hideWhenActive lockLandscapeOnPhone=\{sourceName === 'Nxsha'\} \/>/)
   assert.doesNotMatch(player, /AAK Player|Reload|Open player|<a href=\{src\}/)
-  assert.match(player, /sandbox="allow-scripts allow-same-origin"/)
+  assert.match(player, /const iframeSandbox = sourceName === 'Vidlove' \? undefined : 'allow-scripts allow-same-origin'/)
+  assert.match(player, /sandbox=\{iframeSandbox\}/)
+  assert.match(player, /const iframeReferrerPolicy = sourceName === 'Vidlove' \? 'strict-origin-when-cross-origin' : 'no-referrer'/)
   assert.match(player, /allow="autoplay; encrypted-media; fullscreen; picture-in-picture"/)
   assert.doesNotMatch(player, /allow-popups|allow-top-navigation|allow-presentation/)
+})
+
+test('movie and TV playback offer Hindi, English, and Torrent in that order', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  const choices = app.slice(app.indexOf('function PlayerChoices('), app.indexOf('function ExternalIframePlayer('))
+  assert.ok(choices.indexOf('<span>Hindi</span>') < choices.indexOf('<span>English</span>'))
+  assert.ok(choices.indexOf('<span>English</span>') < choices.indexOf('<span>Torrent</span>'))
+  assert.doesNotMatch(choices, /<small\b/)
+  const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8')
+  assert.match(styles, /\.player-choices\{display:grid;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/)
+  assert.match(styles, /\.player-choices\{width:100%;grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/)
+  assert.match(styles, /\.inline-tv-playback \.player-choices \{ grid-template-columns:repeat\(3,minmax\(0,1fr\)\); \}/)
+  assert.doesNotMatch(styles, /\.player-choices(?:-compact)? button small/)
+  assert.match(app, /<Route path="\/movie\/:id" element=\{<MovieDetailsPage[^>]*player=\{player\} onPlayerChange=\{updatePlayer\}/)
+  assert.match(app, /function MovieDetailsPage[\s\S]*?<PlayerChoices selected=\{player\} onChange=\{onPlayerChange\}/)
+  assert.match(app, /function TvDetailsPage[\s\S]*?<PlayerChoices selected=\{player\} onChange=\{onPlayerChange\}/)
+  assert.match(app, /const vidloveUrl = target \? getExternalPlayerUrl\(vidlovePlaybackSource, target\) : null/)
+  assert.match(app, /media_type: 'tv', id: show\.id, season_number: selectedSeason\.season_number, episode_number: episode\.episode_number/)
+  assert.equal((app.match(/player === 'vidlove' && vidloveUrl \? <ExternalIframePlayer/g) || []).length, 2)
 })
 
 test('AAK fullscreen control hides while active and other player fullscreen behavior remains unchanged', async () => {
@@ -216,7 +256,7 @@ test('AAK fullscreen control hides while active and other player fullscreen beha
   const livePlayer = await readFile(new URL('../src/playback/LiveTvPlayer.tsx', import.meta.url), 'utf8')
   const control = await readFile(new URL('../src/playback/FullscreenButton.tsx', import.meta.url), 'utf8')
   assert.match(app, /<div className="player-frame" ref=\{stage\}>[\s\S]*?<\/div>\s*<div className="player-note"><div className="player-note-controls"><FullscreenButton targetRef=\{playerShell\}/)
-  assert.match(app, /<FullscreenButton targetRef=\{playerShell\} hideWhenActive \/>/)
+  assert.match(app, /<FullscreenButton targetRef=\{playerShell\} hideWhenActive lockLandscapeOnPhone=\{sourceName === 'Nxsha'\} \/>/)
   assert.match(native, /<div className="native-video-player" ref=\{playerShell\}>[\s\S]*?<div className="native-player-toolbar"[\s\S]*?<FullscreenButton targetRef=\{playerShell\} \/>/)
   assert.match(universal, /className="addon-embed-player" ref=\{embedPlayer\}[\s\S]*?<div className="addon-player-toolbar"><FullscreenButton targetRef=\{embedPlayer\} \/>/)
   assert.doesNotMatch(livePlayer, /FullscreenButton|live-tv-player-toolbar/)
@@ -228,6 +268,11 @@ test('AAK fullscreen control hides while active and other player fullscreen beha
   assert.match(control, /webkitEnterFullscreen/)
   assert.match(control, /fullscreenchange/)
   assert.match(control, /target\.contains\(fullscreenElement\)/)
+  assert.match(control, /orientation\.lock\('landscape'\)/)
+  assert.match(control, /releaseOrientationLock\(\)/)
+  assert.match(control, /shouldLockLandscapeOnPhone\(mobileUserAgent, coarsePointer, window\.innerWidth\)/)
+  assert.doesNotMatch(native, /lockLandscapeOnPhone/)
+  assert.doesNotMatch(universal, /lockLandscapeOnPhone/)
   assert.match(control, /aria-label=\{active \? 'Exit fullscreen' : 'Enter fullscreen'\}/)
   assert.match(control, /hideWhenActive && active/)
 })
@@ -646,6 +691,73 @@ test('addon movie lookup maps a TMDB movie to the movie stream endpoint', async 
     assert.ok(requested.some(url => url.pathname === '/3/movie/155/external_ids'))
     assert.equal(requested.some(url => url.pathname.includes('/stream/series/')), false)
   } finally { globalThis.fetch = originalFetch }
+})
+
+test('addon lookup uses a declared TMDB prefix for movies and TV episodes when that is the supported ID format', async () => {
+  const originalFetch = globalThis.fetch
+  const requested = []
+  globalThis.fetch = async input => {
+    const url = new URL(String(input))
+    requested.push(url)
+    if (url.pathname.endsWith('/manifest.json')) return new Response(JSON.stringify({
+      id: 'example.tmdb-addon', version: '1.0.0', name: 'TMDB ID addon', description: 'Test fixture',
+      types: ['movie', 'series'], resources: [{ name: 'stream', types: ['movie', 'series'] }], idPrefixes: ['tmdb:'], catalogs: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+    if (url.hostname === 'api.themoviedb.org') throw new Error('TMDB external ID lookup should not be needed for a declared TMDB prefix.')
+    return new Response('{"streams":[]}', { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  try {
+    const handler = createAddonHandler(() => ({ ENABLE_AUTHORIZED_ADDON_LOOKUPS: 'true', TORRENTIO_MANIFEST_URL: 'https://torrentio.strem.fun/manifest.json' }))
+    const movie = mockResponse()
+    const episode = mockResponse()
+    await handler({ method: 'GET', url: '/api/addons/torrentio?media_type=movie&tmdb_id=155' }, movie)
+    await handler({ method: 'GET', url: '/api/addons/torrentio?media_type=tv&tmdb_id=1396&season_number=2&episode_number=3' }, episode)
+    assert.equal(movie.statusCode, 200)
+    assert.equal(JSON.parse(movie.body).id, 'tmdb:155')
+    assert.equal(episode.statusCode, 200)
+    assert.equal(JSON.parse(episode.body).id, 'tmdb:1396:2:3')
+    assert.ok(requested.some(url => url.pathname === '/stream/movie/tmdb:155.json'))
+    assert.ok(requested.some(url => url.pathname === '/stream/series/tmdb:1396:2:3.json'))
+    assert.equal(requested.some(url => url.hostname === 'api.themoviedb.org'), false)
+  } finally { globalThis.fetch = originalFetch }
+})
+
+test('HdHub uses its live manifest shape and maps movie and episode requests through IMDb IDs', async () => {
+  const originalFetch = globalThis.fetch
+  const requested = []
+  globalThis.fetch = async input => {
+    const url = new URL(String(input))
+    requested.push(url)
+    if (url.hostname === 'api.themoviedb.org') {
+      const id = url.pathname.startsWith('/3/movie/') ? 'tt0468569' : 'tt0903747'
+      return new Response(JSON.stringify({ imdb_id: id }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    if (url.pathname.endsWith('/manifest.json')) return new Response(JSON.stringify({
+      id: 'com.stremio.HdHub', version: '1.0.7', name: 'HdHub', description: 'Test fixture',
+      resources: ['stream', 'catalog'], types: ['movie', 'series', 'HdHub'], idPrefixes: ['tt', 'tmdb:', 'kitsu:'], catalogs: [],
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+    return new Response(JSON.stringify({ streams: [{ name: 'Authorized direct media', title: 'Test source', url: 'https://media.example/test.mp4', quality: '1080p' }] }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  try {
+    const handler = createAddonHandler(() => ({ ENABLE_AUTHORIZED_ADDON_LOOKUPS: 'true', TMDB_READ_ACCESS_TOKEN: 'unit-test-token', HDHUB_MANIFEST_URL: 'https://hdhub.thevolecitor.qzz.io/manifest.json' }))
+    const movie = mockResponse()
+    const episode = mockResponse()
+    await handler({ method: 'GET', url: '/api/addons/hdhub?media_type=movie&tmdb_id=155' }, movie)
+    await handler({ method: 'GET', url: '/api/addons/hdhub?media_type=tv&tmdb_id=1396&season_number=2&episode_number=3' }, episode)
+    assert.equal(movie.statusCode, 200)
+    assert.equal(JSON.parse(movie.body).id, 'tt0468569')
+    assert.equal(JSON.parse(movie.body).streams[0].playbackKind, 'direct-video')
+    assert.equal(episode.statusCode, 200)
+    assert.equal(JSON.parse(episode.body).id, 'tt0903747:2:3')
+    assert.equal(JSON.parse(episode.body).streams[0].playbackKind, 'direct-video')
+    assert.ok(requested.some(url => url.pathname === '/stream/movie/tt0468569.json'))
+    assert.ok(requested.some(url => url.pathname === '/stream/series/tt0903747:2:3.json'))
+  } finally { globalThis.fetch = originalFetch }
+})
+
+test('built-in addon ID prefix labels include prefixes declared on stream resources', () => {
+  assert.deepEqual(getManifestIdPrefixes(builtInManifests.find(item => item.provider === 'torrentio')), ['tt', 'kitsu'])
+  assert.deepEqual(getManifestIdPrefixes(builtInManifests.find(item => item.provider === 'hdhub')), ['tt', 'tmdb:', 'kitsu:'])
 })
 
 test('addon lookup sections fail independently and classify non-browser sources safely', async () => {
