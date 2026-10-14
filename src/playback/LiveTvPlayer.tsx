@@ -24,7 +24,6 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
   const [status, setStatus] = useState<PlaybackStatus>('loading')
   const statusRef = useRef<PlaybackStatus>('loading')
   statusRef.current = status
-  const [error, setError] = useState('')
   const onStatusRef = useRef(onStatus)
   onStatusRef.current = onStatus
 
@@ -40,17 +39,15 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
     let frameStartTimer: ReturnType<typeof setTimeout> | undefined
     let frameCallback: number | undefined
     setStatus('loading')
-    setError('')
     const stopAudioSync = syncVideoAudioPreference(element)
 
-    const report = (next: PlaybackStatus, message = '') => {
+    const report = (next: PlaybackStatus) => {
       if (!active || didFail && next !== 'error') return
       statusRef.current = next
       setStatus(next)
-      setError(message)
       if (next === 'playing') onStatusRef.current?.('online', 'Playback started in the browser.')
     }
-    const fail = (message: string, availability: AvailabilityStatus = 'unknown') => {
+    const fail = (availability: AvailabilityStatus = 'unknown') => {
       if (didFail) return
       didFail = true
       if (frameConfirmTimer) clearTimeout(frameConfirmTimer)
@@ -62,8 +59,8 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
       element.pause()
       element.removeAttribute('src')
       element.load()
-      report('error', message)
-      onStatusRef.current?.(availability, message)
+      report('error')
+      onStatusRef.current?.(availability)
     }
     function confirmVideoFrame() {
       if (!active || didFail || element.paused) return
@@ -93,7 +90,7 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
           const latestFrameCount = element.getVideoPlaybackQuality?.().totalVideoFrames ?? frameVideo.webkitDecodedFrameCount ?? 0
           const hasDimensions = typeof frameVideo.requestVideoFrameCallback !== 'function' && element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && element.videoWidth > 0 && element.videoHeight > 0
           if (latestFrameCount > 0 || hasDimensions) report('playing')
-          else fail('Playback could not be confirmed. Try another channel.')
+          else fail()
         }, 12000)
       }
     }
@@ -105,15 +102,15 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
       }).catch(cause => {
         if (!active) return
         const blocked = cause instanceof DOMException && cause.name === 'NotAllowedError'
-        report(blocked ? 'blocked' : 'error', blocked ? 'Autoplay was blocked. Use the video controls to start this channel.' : 'This stream could not be started. Please try again.')
-        if (!blocked) onStatusRef.current?.('unknown', 'Playback did not start in this browser.')
+        report(blocked ? 'blocked' : 'error')
+        if (!blocked) onStatusRef.current?.('unknown')
       })
       frameStartTimer = setTimeout(() => {
         frameStartTimer = undefined
         if (active && !element.paused) confirmVideoFrame()
       }, 250)
     }
-    const handleMediaError = () => fail('This channel could not be played. Try another channel.')
+    const handleMediaError = () => fail()
     const handlePlaying = () => confirmVideoFrame()
     const handleLoadedData = () => { if (!element.paused) confirmVideoFrame() }
     const handleWaiting = () => report('loading')
@@ -135,7 +132,7 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
           const Hls = (await import('hls.js')).default
           if (!active) return
           if (!Hls.isSupported()) {
-            fail('This browser does not support HLS playback.')
+            fail()
             return
           }
           instance = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 30, backBufferLength: 15 })
@@ -147,12 +144,7 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
             if (!active || !data.fatal) return
             const responseCode = (data as typeof data & { response?: { code?: number } }).response?.code
             const confirmedOffline = responseCode === 404 || responseCode === 410
-            const message = data.type === Hls.ErrorTypes.NETWORK_ERROR
-              ? confirmedOffline ? 'This channel returned a confirmed not-found response.' : 'This channel could not be reached by the player.'
-              : data.type === Hls.ErrorTypes.MEDIA_ERROR
-                ? 'This channel uses a media format this browser cannot decode.'
-                : 'This channel could not be played. Try another channel.'
-            fail(message, confirmedOffline ? 'offline' : 'unknown')
+            fail(confirmedOffline ? 'offline' : 'unknown')
           })
           instance.attachMedia(element)
         }
@@ -161,7 +153,7 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
         element.load()
       }
     }
-    void start().catch(cause => { if (active) fail(cause instanceof Error ? cause.message : 'The HLS player could not be loaded.') })
+    void start().catch(() => { if (active) fail() })
 
     return () => {
       active = false
@@ -187,8 +179,6 @@ export function LiveTvPlayer({ channel, onStatus, onPrevious, onNext }: LiveTvPl
       <video ref={video} controls playsInline preload="none" aria-label={`${channel.name} live channel`} />
     </div>
     {status === 'loading' && <p className="live-player-status" role="status">Connecting to {channel.name}…</p>}
-    {status === 'blocked' && <p className="live-player-status" role="status">{error}</p>}
-    {status === 'error' && <p className="live-player-status live-player-error" role="alert">{error}</p>}
     <nav className="live-channel-navigation" aria-label="Live TV channel navigation">
       <button type="button" onClick={onPrevious} disabled={!onPrevious} aria-label="Previous channel"><ChevronLeft size={16} aria-hidden="true" /><span>Previous</span></button>
       <button type="button" onClick={onNext} disabled={!onNext} aria-label="Next channel"><span>Next</span><ChevronRight size={16} aria-hidden="true" /></button>

@@ -263,11 +263,24 @@ test('Live TV keeps the full filtered directory browsable and checks visible row
   assert.match(player, /<video ref=\{video\} controls playsInline/)
   assert.doesNotMatch(player, /qualityLevels|FullscreenButton|live-volume-control|Reconnect|live-tv-player-toolbar/)
   assert.match(player, /metadata\.presentedFrames > 0/)
-  assert.match(player, /Playback could not be confirmed/)
+  assert.doesNotMatch(player, /status === 'error'|status === 'blocked'|role="alert"|Playback could not be confirmed/)
+  assert.match(player, /const handleMediaError = \(\) => fail\(\)/)
   assert.doesNotMatch(player, /<input[^>]+type="range"[^>]+aria-label="Seek|durationProgress/)
   assert.match(styles, /body\.live-tv-active\s*\{[^}]*overflow:hidden/)
+  assert.doesNotMatch(styles, /\.live-player-error\s*\{[^}]*position:absolute/)
   assert.match(styles, /\.live-channel-scroll\s*\{[^}]*flex:1;overflow:auto/)
   assert.match(styles, /\.live-category-filters\s*\{[^}]*overflow-x:auto/)
+})
+
+test('Live TV media failures stay silent while video and channel controls remain mounted', async () => {
+  const player = await readFile(new URL('../src/playback/LiveTvPlayer.tsx', import.meta.url), 'utf8')
+  const output = player.slice(player.indexOf('return <div className="live-tv-player">'))
+  assert.match(player, /const handleMediaError = \(\) => fail\(\)/)
+  assert.match(player, /const fail = \(availability: AvailabilityStatus = 'unknown'\)/)
+  assert.match(player, /onStatusRef\.current\?\.\(availability\)/)
+  assert.doesNotMatch(output, /role="alert"|live-player-error|status === 'error'|status === 'blocked'/)
+  assert.match(output, /<video ref=\{video\} controls playsInline/)
+  assert.match(output, /<nav className="live-channel-navigation"[\s\S]*?onClick=\{onPrevious\}[\s\S]*?onClick=\{onNext\}/)
 })
 
 test('desktop and mobile share the six destination quick navigation', async () => {
@@ -541,6 +554,7 @@ test('PWA manifest keeps AAK branding and declares the install icon sizes', asyn
   assert.equal(manifest.name, 'AAK Movies')
   assert.equal(manifest.start_url, '/')
   assert.equal(manifest.display, 'standalone')
+  assert.equal(manifest.orientation, 'portrait')
   assert.equal(manifest.icons.some(icon => icon.sizes === '192x192'), true)
   assert.equal(manifest.icons.some(icon => icon.sizes === '512x512' && icon.purpose === 'maskable'), true)
   const worker = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8')
