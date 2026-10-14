@@ -23,3 +23,6 @@ Thumbs.db
 # TypeScript / test artifacts
 *.tsbuildinfo
 coverage/
+
+# Local project documentation
+README.md

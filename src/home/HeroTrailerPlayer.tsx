@@ -1,79 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Play } from 'lucide-react'
-
-type Player = {
-  destroy: () => void
-  mute: () => void
-  unMute: () => void
-  playVideo: () => void
-  pauseVideo: () => void
-  getPlayerState: () => number
-  getIframe: () => HTMLIFrameElement
-}
-type PlayerEvent = { data: number; target: Player }
-type PlayerOptions = {
-  events: {
-    onReady: (event: { target: Player }) => void
-    onStateChange: (event: PlayerEvent) => void
-    onError: () => void
-    onAutoplayBlocked: () => void
-  }
-}
-type YouTubeApi = {
-  PlayerState: { ENDED: number; PLAYING: number; PAUSED: number; BUFFERING: number; CUED: number }
-  Player: new (element: HTMLIFrameElement | HTMLElement, options: PlayerOptions) => Player
-}
-
-declare global {
-  interface Window {
-    YT?: YouTubeApi
-    onYouTubeIframeAPIReady?: () => void
-  }
-}
+import { loadYouTubeApi, makeYouTubeEmbedUrl, type YouTubeApi, type YouTubePlayer as Player } from '../playback/youtube'
 
 type TrailerPhase = 'loading' | 'ready' | 'playing' | 'buffering' | 'paused' | 'blocked' | 'ended' | 'error'
-let apiPromise: Promise<YouTubeApi> | null = null
-
-function loadYouTubeApi(): Promise<YouTubeApi> {
-  if (window.YT?.Player) return Promise.resolve(window.YT)
-  if (apiPromise) return apiPromise
-  apiPromise = new Promise<YouTubeApi>((resolve, reject) => {
-    let settled = false
-    let priorReady: (() => void) | undefined
-    let handler: (() => void) | undefined
-    const script = document.querySelector<HTMLScriptElement>('script[src="https://www.youtube.com/iframe_api"]')
-    const timeout = window.setTimeout(() => finish(new Error('YouTube player API did not become ready.')), 12000)
-    const finish = (error?: Error) => {
-      if (settled) return
-      settled = true
-      window.clearTimeout(timeout)
-      if (handler && window.onYouTubeIframeAPIReady === handler) window.onYouTubeIframeAPIReady = priorReady
-      if (error) reject(error)
-      else if (window.YT?.Player) resolve(window.YT)
-      else reject(new Error('YouTube player API is unavailable.'))
-    }
-    priorReady = window.onYouTubeIframeAPIReady
-    handler = () => {
-      try { priorReady?.() } catch (error) { console.warn('[Hero trailer] Existing YouTube API callback failed.', error) }
-      finish()
-    }
-    window.onYouTubeIframeAPIReady = handler
-    if (!script) {
-      const nextScript = document.createElement('script')
-      nextScript.src = 'https://www.youtube.com/iframe_api'
-      nextScript.async = true
-      nextScript.onerror = () => finish(new Error('YouTube player API could not be loaded.'))
-      document.head.append(nextScript)
-    } else {
-      script.addEventListener('error', () => finish(new Error('YouTube player API could not be loaded.')), { once: true })
-    }
-  }).catch(error => {
-    apiPromise = null
-    throw error
-  })
-  return apiPromise
-}
-
 export function HeroTrailerPlayer({
   mediaKey,
   videoKey,
@@ -83,6 +12,8 @@ export function HeroTrailerPlayer({
   onPlayingChange,
   onRetry,
   onRegisterToggle,
+  onMutedChange,
+  onRegisterSetMuted,
 }: {
   mediaKey: string
   videoKey: string
@@ -92,6 +23,8 @@ export function HeroTrailerPlayer({
   onPlayingChange: (mediaKey: string, playing: boolean) => void
   onRetry: (mediaKey: string) => void
   onRegisterToggle: (toggle: (() => void) | null) => void
+  onMutedChange: (mediaKey: string, muted: boolean) => void
+  onRegisterSetMuted: (setMuted: ((muted: boolean) => void) | null) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const player = useRef<Player | null>(null)
@@ -103,6 +36,8 @@ export function HeroTrailerPlayer({
   const ended = useRef(false)
   const failed = useRef(false)
   mutedRef.current = muted
+  const onMutedChangeRef = useRef(onMutedChange)
+  onMutedChangeRef.current = onMutedChange
 
   useEffect(() => {
     const togglePlayback = () => {
@@ -118,8 +53,21 @@ export function HeroTrailerPlayer({
       }
     }
     onRegisterToggle(togglePlayback)
-    return () => onRegisterToggle(null)
-  }, [mediaKey, onRegisterToggle])
+    const setPlayerMuted = (nextMuted: boolean) => {
+      const current = player.current
+      if (!current) return
+      try {
+        if (nextMuted) current.mute()
+        else current.unMute()
+        window.setTimeout(() => {
+          if (player.current !== current) return
+          try { onMutedChangeRef.current(mediaKey, current.isMuted()) } catch (cause) { console.warn('[Hero trailer] Could not read player audio state.', cause) }
+        }, 180)
+      } catch (cause) { console.warn('[Hero trailer] Audio preference update failed.', { mediaKey, cause }) }
+    }
+    onRegisterSetMuted(setPlayerMuted)
+    return () => { onRegisterToggle(null); onRegisterSetMuted(null) }
+  }, [mediaKey, onRegisterToggle, onRegisterSetMuted])
 
   useEffect(() => {
     active.current = true
@@ -149,7 +97,7 @@ export function HeroTrailerPlayer({
           frame.title = `Featured trailer for ${mediaKey.replace(':', ' ')}`
           frame.tabIndex = -1
           frame.allow = 'autoplay; encrypted-media; picture-in-picture'
-          frame.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoKey)}?autoplay=1&mute=${mutedRef.current ? 1 : 0}&controls=0&playsinline=1&rel=0&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`
+          frame.src = makeYouTubeEmbedUrl(videoKey, { autoplay: true, muted: true, controls: false })
           host.current.replaceChildren(frame)
           instance = new api.Player(frame, {
             events: {
@@ -158,8 +106,8 @@ export function HeroTrailerPlayer({
                 player.current = target
                 target.getIframe().title = frame.title
                 target.getIframe().tabIndex = -1
-                if (mutedRef.current) target.mute()
-                else target.unMute()
+                target.mute()
+                try { onMutedChangeRef.current(mediaKey, target.isMuted()) } catch (cause) { console.warn('[Hero trailer] Could not read initial player audio state.', cause) }
                 setPhase('ready')
                 target.playVideo()
               },
@@ -167,6 +115,16 @@ export function HeroTrailerPlayer({
                 if (cancelled || failed.current || !active.current) return
                 if (event.data === api.PlayerState.PLAYING) {
                   played.current = true
+                  try {
+                    if (mutedRef.current) event.target.mute()
+                    else event.target.unMute()
+                    const target = event.target
+                    window.setTimeout(() => {
+                      if (!cancelled && player.current === target) {
+                        try { onMutedChangeRef.current(mediaKey, target.isMuted()) } catch (cause) { console.warn('[Hero trailer] Could not read player audio state.', cause) }
+                      }
+                    }, 180)
+                  } catch (cause) { console.warn('[Hero trailer] Could not apply saved audio preference.', { mediaKey, cause }) }
                   setPhase('playing')
                   onPlayingChange(mediaKey, true)
                 } else if (event.data === api.PlayerState.BUFFERING) {
@@ -174,6 +132,7 @@ export function HeroTrailerPlayer({
                 } else if (event.data === api.PlayerState.PAUSED || event.data === api.PlayerState.CUED) {
                   setPhase(played.current ? 'paused' : 'ready')
                   onPlayingChange(mediaKey, false)
+                  try { onMutedChangeRef.current(mediaKey, event.target.isMuted()) } catch { /* Player may be tearing down. */ }
                 } else if (event.data === api.PlayerState.ENDED) {
                   setPhase('ended')
                   onPlayingChange(mediaKey, false)
@@ -212,9 +171,16 @@ export function HeroTrailerPlayer({
 
   useEffect(() => {
     if (!player.current) return
-    if (muted) player.current.mute()
-    else player.current.unMute()
-  }, [muted])
+    try {
+      if (muted) player.current.mute()
+      else player.current.unMute()
+      const current = player.current
+      window.setTimeout(() => {
+        if (player.current !== current) return
+        try { onMutedChangeRef.current(mediaKey, current.isMuted()) } catch { /* Player may be tearing down. */ }
+      }, 180)
+    } catch (cause) { console.warn('[Hero trailer] Audio preference update failed.', { mediaKey, cause }) }
+  }, [mediaKey, muted])
 
   const canStart = phase === 'ready' || phase === 'blocked' || phase === 'paused' || phase === 'error'
   const playLabel = phase === 'error' ? 'Retry featured trailer' : phase === 'paused' ? 'Resume featured trailer' : 'Play featured trailer'

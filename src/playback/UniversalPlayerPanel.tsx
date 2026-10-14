@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, FileVideo2 } from 'lucide-react'
 import { builtInManifests, describeManifestResource } from './builtInManifests'
 import { NativeVideoPlayer, type DirectMediaSource } from './NativeVideoPlayer'
+import { FullscreenButton } from './FullscreenButton'
 import { getProgressKey, readWatchProgress, saveWatchProgress, removeWatchProgress, type WatchProgressContext } from './watchProgress'
 
 export type UniversalMediaContext = {
@@ -49,8 +50,10 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
   const [mediaError, setMediaError] = useState('')
   const [playerKey, setPlayerKey] = useState(0)
   const [addonSources, setAddonSources] = useState<Record<string, AddonSourceState>>(emptyAddonStates)
+  const [retryAttempt, setRetryAttempt] = useState(0)
   const [embedSource, setEmbedSource] = useState<{ url: string; title: string } | null>(null)
   const [externalSource, setExternalSource] = useState<string | null>(null)
+  const embedPlayer = useRef<HTMLDivElement>(null)
   const contextKey = mediaContext ? `${mediaContext.media_type}:${mediaContext.tmdbId}:${mediaContext.seasonNumber ?? ''}:${mediaContext.episodeNumber ?? ''}` : ''
   const progressContext: WatchProgressContext | null = mediaContext ? {
     media_type: mediaContext.media_type,
@@ -87,9 +90,13 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
     setAddonSources(loadingStates)
 
     const startRequests = () => {
-      for (const manifest of builtInManifests) {
+    for (const manifest of builtInManifests) {
         const query = new URLSearchParams({ media_type: mediaContext.media_type, tmdb_id: String(mediaContext.tmdbId) })
         if (mediaContext.media_type === 'tv') {
+        if (!Number.isSafeInteger(mediaContext.seasonNumber) || (mediaContext.seasonNumber ?? -1) < 0 || !Number.isSafeInteger(mediaContext.episodeNumber) || (mediaContext.episodeNumber ?? 0) <= 0) {
+          setAddonSources(current => ({ ...current, [manifest.provider]: { status: 'error', streams: [], message: 'Choose a valid TV season and episode before searching sources.' } }))
+          continue
+        }
           query.set('season_number', String(mediaContext.seasonNumber))
           query.set('episode_number', String(mediaContext.episodeNumber))
         }
@@ -124,7 +131,7 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
     // cancel its probe mount before any network requests are issued.
     const startTimer = window.setTimeout(startRequests, 0)
     return () => { window.clearTimeout(startTimer); controller.abort() }
-  }, [contextKey])
+  }, [contextKey, retryAttempt])
 
   const selectAddonStream = (stream: AddonStream) => {
     setMediaError('')
@@ -157,7 +164,7 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
     {source && <div className="native-player-wrap" key={playerKey}>
       <NativeVideoPlayer source={source} title={title.trim() || 'Video'} resumeAtSeconds={savedProgress?.position ?? 0} onProgress={recordProgress} onComplete={completeProgress} onError={() => setMediaError('This media could not be played. Check the file format, URL, and whether the host permits playback.')} />
     </div>}
-    {embedSource && <div className="addon-embed-wrap"><iframe title={embedSource.title} src={embedSource.url} loading="eager" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="no-referrer" /><span>Loading player…</span></div>}
+    {embedSource && <div className="addon-embed-player" ref={embedPlayer}><div className="addon-embed-wrap"><iframe title={embedSource.title} src={embedSource.url} loading="eager" sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" allow="autoplay; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="no-referrer" /><span>Loading player…</span></div><div className="addon-player-toolbar"><FullscreenButton targetRef={embedPlayer} /></div></div>}
     {externalSource && <a className="button button-outline" href={externalSource} target="_blank" rel="noreferrer">Open source <ExternalLink size={14} /></a>}
     {mediaError && <p role="alert" className="form-error">{mediaError}</p>}
 
@@ -167,7 +174,7 @@ export function UniversalPlayerPanel({ contextLabel = 'Personal video', mediaCon
         <p>{manifest.lookupMessage}</p>
         <div className="addon-source-meta"><span>Types: {manifest.types.join(', ')}</span><span>Resources: {manifest.resources.map(describeManifestResource).join(', ')}</span><span>ID prefixes: {manifest.idPrefixes.join(', ') || 'Not declared'}</span></div>
         {addonSources[manifest.provider].status === 'loading' && <p className="addon-source-pending" role="status">Loading {manifest.name} sources…</p>}
-        {addonSources[manifest.provider].status === 'error' && <p className="addon-source-error" role="alert">{addonSources[manifest.provider].message}</p>}
+        {addonSources[manifest.provider].status === 'error' && <div className="addon-source-error-wrap"><p className="addon-source-error" role="alert">{addonSources[manifest.provider].message}</p><button type="button" className="button button-outline" onClick={() => setRetryAttempt(value => value + 1)}>Try again</button></div>}
         {addonSources[manifest.provider].status === 'ready' && addonSources[manifest.provider].streams.length === 0 && <p className="addon-source-pending" role="status">No compatible sources found.</p>}
         {addonSources[manifest.provider].streams.map((stream, index) => <article className="addon-stream-entry" key={stream.id || `${manifest.provider}-${index}`}>
           <div><strong>{stream.title || stream.name || 'Source'}</strong>{stream.title && stream.name && <small>{stream.name}</small>}<div className="addon-stream-meta">{stream.quality && <span>{stream.quality}</span>}{stream.language && <span>{stream.language}</span>}{stream.size !== undefined && <span>{String(stream.size)}</span>}{stream.sourceType && <span>{stream.sourceType}</span>}</div></div>

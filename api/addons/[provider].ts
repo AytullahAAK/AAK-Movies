@@ -107,11 +107,13 @@ export function createAddonHandler(getEnv: () => AddonEnv = runtimeEnv) {
 
     const mediaType = incoming.searchParams.get('media_type')
     const tmdbId = Number(incoming.searchParams.get('tmdb_id'))
-    const seasonNumber = Number(incoming.searchParams.get('season_number'))
-    const episodeNumber = Number(incoming.searchParams.get('episode_number'))
+    const seasonNumberParam = incoming.searchParams.get('season_number')
+    const episodeNumberParam = incoming.searchParams.get('episode_number')
+    const seasonNumber = Number(seasonNumberParam)
+    const episodeNumber = Number(episodeNumberParam)
     if (mediaType !== 'movie' && mediaType !== 'tv') { send(response, 400, { message: 'media_type must be movie or tv.' }); return }
     if (!Number.isSafeInteger(tmdbId) || tmdbId <= 0) { send(response, 400, { message: 'tmdb_id must be a positive integer.' }); return }
-    if (mediaType === 'tv' && (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0 || !Number.isSafeInteger(episodeNumber) || episodeNumber <= 0)) {
+    if (mediaType === 'tv' && (!seasonNumberParam?.trim() || !episodeNumberParam?.trim() || !Number.isSafeInteger(seasonNumber) || seasonNumber < 0 || !Number.isSafeInteger(episodeNumber) || episodeNumber <= 0)) {
       send(response, 400, { message: 'TV lookups require a non-negative season number and a positive episode number.' }); return
     }
     const tmdbToken = env.TMDB_READ_ACCESS_TOKEN

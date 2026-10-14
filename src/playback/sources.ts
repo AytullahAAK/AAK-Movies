@@ -18,10 +18,10 @@ export const nxshaPlaybackSource: ExternalPlaybackSource = {
   buildUrl: target => {
     if (!validPositiveId(target.id)) return null
     if (target.media_type === 'movie') {
-      return `https://web.nxsha.app/embed/movie/${target.id}?color=orange`
+      return `https://web.nxsha.app/embed/movie/${target.id}?color=orange&disable_app_ad=true`
     }
     if (!Number.isSafeInteger(target.season_number) || target.season_number < 0 || !validPositiveId(target.episode_number)) return null
-    return `https://web.nxsha.app/embed/tv/${target.id}/${target.season_number}/${target.episode_number}`
+    return `https://web.nxsha.app/embed/tv/${target.id}/${target.season_number}/${target.episode_number}?disable_app_ad=true`
   },
 }
 

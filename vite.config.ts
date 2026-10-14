@@ -1,8 +1,9 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { createAddonHandler } from './api/addons/[provider].ts'
+import { createLiveTvHealthHandler } from './api/live-tv/health.ts'
 
-const allowedPaths = /^\/(?:trending\/all\/day|search\/(?:movie|tv|multi)|discover\/(?:movie|tv)|watch\/providers\/(?:movie|tv)|genre\/(?:movie|tv)\/list|movie\/(?:\d+(?:\/(?:external_ids|watch\/providers))?|(?:popular|top_rated))|tv\/(?:\d+(?:\/(?:external_ids|watch\/providers|season\/\d+))?|(?:popular|top_rated)))$/
+const allowedPaths = /^\/(?:trending\/(?:all|movie|tv)\/day|search\/(?:movie|tv|multi)|discover\/(?:movie|tv)|watch\/providers\/(?:movie|tv)|genre\/(?:movie|tv)\/list|movie\/(?:\d+(?:\/(?:external_ids|watch\/providers))?|(?:popular|top_rated))|tv\/(?:\d+(?:\/(?:external_ids|watch\/providers|season\/\d+))?|(?:popular|top_rated)))$/
 const allowedQueryKeys = new Set(['query', 'include_adult', 'append_to_response', 'language', 'page', 'region', 'watch_region', 'with_watch_providers', 'with_watch_monetization_types', 'with_original_language', 'with_genres', 'sort_by', 'primary_release_year', 'first_air_date_year'])
 
 function localTmdbProxy(env: Record<string, string>, mode: string): Plugin {
@@ -10,9 +11,31 @@ function localTmdbProxy(env: Record<string, string>, mode: string): Plugin {
     name: 'aak-tmdb-local-proxy',
     configureServer(server) {
       const addonHandler = createAddonHandler(() => env)
+      const liveTvHealthHandler = createLiveTvHealthHandler()
       server.middlewares.use(async (request, response, next) => {
-        const req = request as typeof request & { url?: string; method?: string }
+        const req = request as typeof request & { url?: string; method?: string; body?: unknown }
         const incoming = new URL(req.url ?? '/', 'http://localhost')
+        if (incoming.pathname === '/api/live-tv/health') {
+          if (req.method !== 'POST') { await liveTvHealthHandler(req, response); return }
+          const chunks: Buffer[] = []
+          let size = 0
+          try {
+            for await (const chunk of request) {
+              const part = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+              size += part.byteLength
+              if (size > 8192) { response.statusCode = 413; response.end(JSON.stringify({ message: 'Request is too large.' })); return }
+              chunks.push(part)
+            }
+            req.body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+          } catch {
+            response.statusCode = 400
+            response.setHeader('Content-Type', 'application/json')
+            response.end(JSON.stringify({ message: 'A valid JSON request is required.' }))
+            return
+          }
+          await liveTvHealthHandler(req, response)
+          return
+        }
         if (incoming.pathname.startsWith('/api/addons/')) {
           await addonHandler(req, response)
           return

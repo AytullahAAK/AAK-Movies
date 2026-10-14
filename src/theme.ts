@@ -1,23 +1,5 @@
-export const accentPresets = [
-  { id: 'blue', label: 'Blue', color: '#2563eb' },
-  { id: 'sky-blue', label: 'Sky Blue', color: '#1684d8' },
-  { id: 'cyan', label: 'Cyan', color: '#0891b2' },
-  { id: 'teal', label: 'Teal', color: '#0f8a83' },
-  { id: 'emerald', label: 'Emerald', color: '#07835d' },
-  { id: 'green', label: 'Green', color: '#25803d' },
-  { id: 'amber', label: 'Amber', color: '#a85a00' },
-  { id: 'orange', label: 'Orange', color: '#c6530b' },
-  { id: 'coral', label: 'Coral', color: '#cf5144' },
-  { id: 'rose', label: 'Rose', color: '#be315b' },
-  { id: 'pink', label: 'Pink', color: '#c02b87' },
-  { id: 'violet', label: 'Violet', color: '#7044ca' },
-  { id: 'purple', label: 'Purple', color: '#7933b0' },
-  { id: 'indigo', label: 'Indigo', color: '#4f46bd' },
-  { id: 'slate', label: 'Slate', color: '#52657d' },
-] as const
-
-export type AccentPreset = typeof accentPresets[number]['id']
-export type AccentValue = AccentPreset | `#${string}`
+export const defaultAccent = '#42D9FF' as const
+export type AccentValue = `#${string}`
 
 export const accentPreferenceKey = 'aak-movies-accent'
 export const lastCustomAccentPreferenceKey = 'aak-movies-last-custom-accent'
@@ -31,26 +13,9 @@ export function writePreference(key: string, value: string): boolean {
 }
 
 export function storeCustomAccent(value: string): boolean {
-  return isHexAccent(value) ? writePreference(lastCustomAccentPreferenceKey, value.toLowerCase()) : false
-}
-
-export type AccentChoice = { value: AccentValue; label: string; color: string; isLastCustom: boolean }
-
-export function getAccentChoices(lastCustomColor: string | null): AccentChoice[] {
-  const validCustom = lastCustomColor && isHexAccent(lastCustomColor) ? lastCustomColor.toLowerCase() as `#${string}` : null
-  const matchingPreset = validCustom ? accentPresets.find(item => item.color.toLowerCase() === validCustom) : undefined
-  const choices: AccentChoice[] = []
-  if (validCustom) choices.push({
-    value: validCustom,
-    label: matchingPreset ? `Your last custom color · ${matchingPreset.label}` : 'Your last custom color',
-    color: validCustom,
-    isLastCustom: true,
-  })
-  for (const preset of accentPresets) {
-    if (matchingPreset?.id === preset.id) continue
-    choices.push({ value: preset.id, label: preset.label, color: preset.color, isLastCustom: false })
-  }
-  return choices
+  return isHexAccent(value) && value.toLowerCase() !== defaultAccent.toLowerCase()
+    ? writePreference(lastCustomAccentPreferenceKey, value.toLowerCase())
+    : false
 }
 
 export function isHexAccent(value: string): value is `#${string}` {
@@ -58,7 +23,7 @@ export function isHexAccent(value: string): value is `#${string}` {
 }
 
 export function isAccentValue(value: string | null): value is AccentValue {
-  return !!value && (isHexAccent(value) || accentPresets.some(item => item.id === value))
+  return !!value && isHexAccent(value)
 }
 
 function luminance(hex: string) {
@@ -88,8 +53,8 @@ function accentForBackground(color: string, background: string, targetContrast: 
   return target
 }
 
-export function getAccentColors(value: AccentValue) {
-  const raw = isHexAccent(value) ? value : accentPresets.find(item => item.id === value)?.color ?? '#2563eb'
+export function getAccentColors(value: string) {
+  const raw = isHexAccent(value) ? value : defaultAccent
   const light = accentForBackground(raw, '#ffffff', 4.5)
   const night = accentForBackground(raw, '#000000', 4.5)
   const foreground = (background: string) => contrast('#000000', background) >= contrast('#ffffff', background) ? '#000000' : '#ffffff'
@@ -102,5 +67,5 @@ export function getAccentColors(value: AccentValue) {
 }
 
 export function accentLabel(value: AccentValue) {
-  return isHexAccent(value) ? 'Custom' : accentPresets.find(item => item.id === value)?.label ?? 'Blue'
+  return value.toLowerCase() === defaultAccent.toLowerCase() ? 'Default' : 'Custom'
 }

@@ -1,6 +1,6 @@
 export type MediaType = 'movie' | 'tv'
 export type CatalogSort = 'trending' | 'popular' | 'top_rated' | 'newest'
-export type WatchProvider = { provider_id: number; provider_name: string; logo_path: string; display_priority: number }
+export type WatchProvider = { provider_id: number; provider_name: string; logo_path: string | null; display_priority: number }
 export type WatchMonetization = 'flatrate' | 'free' | 'ads' | 'rent' | 'buy'
 export type ProviderRegion = { code: string; label: string }
 export const providerRegions: ProviderRegion[] = [
@@ -31,8 +31,8 @@ export type TvShow = Media & { media_type: 'tv'; first_air_date?: string; number
 export type TvSeason = { id: number; name: string; season_number: number; episode_count: number; overview: string; poster_path: string | null; air_date: string | null }
 export type TvEpisode = { id: number; name: string; episode_number: number; season_number: number; overview: string; still_path: string | null; air_date: string | null; runtime: number | null }
 export type CastMember = { id: number; name: string; character: string; profilePath: string | null }
-export type MovieDetails = Movie & { runtimeMinutes?: number; cast: CastMember[]; trailerKey?: string; recommendations: Movie[] }
-export type TvDetails = TvShow & { seasons: TvSeason[]; cast: CastMember[]; trailerKey?: string; recommendations: TvShow[] }
+export type MovieDetails = Movie & { runtimeMinutes?: number; cast: CastMember[]; trailerKey?: string; officialTrailerKey?: string; recommendations: Movie[] }
+export type TvDetails = TvShow & { seasons: TvSeason[]; cast: CastMember[]; trailerKey?: string; officialTrailerKey?: string; recommendations: TvShow[] }
 
 const photos = {
   dune: 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1800&q=85',
@@ -66,14 +66,15 @@ const languageNames: Record<string, string> = { en: 'English', ja: 'Japanese', k
 const imageUrl = (path: string | null | undefined, size: 'w500' | 'original' = 'w500') => path ? `https://image.tmdb.org/t/p/${size}${path}` : photos.portrait
 const yearOf = (date?: string) => date?.slice(0, 4) ?? ''
 
-async function tmdb<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+async function tmdb<T>(path: string, params: Record<string, string> = {}, signal?: AbortSignal): Promise<T> {
   const url = new URL(apiBase, window.location.origin)
   url.searchParams.set('path', path)
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value))
   let response: Response
   try {
-    response = await fetch(url, { headers: { Accept: 'application/json' } })
+    response = await fetch(url, { headers: { Accept: 'application/json' }, signal })
   } catch (cause) {
+    if (signal?.aborted) throw cause
     if (import.meta.env.DEV) console.error('[TMDB] API request could not reach the same-origin proxy.', { path, cause })
     throw new Error('Could not reach the TMDB service. Please try again.')
   }
@@ -267,9 +268,63 @@ export function mergeWatchProviders(...groups: WatchProvider[][]): WatchProvider
   const unique = new Map<number, WatchProvider>()
   for (const provider of groups.flat()) {
     const current = unique.get(provider.provider_id)
-    if (!current || provider.display_priority < current.display_priority) unique.set(provider.provider_id, provider)
+    if (!current) {
+      unique.set(provider.provider_id, provider)
+      continue
+    }
+    const preferred = provider.display_priority < current.display_priority ? provider : current
+    const fallbackLogo = [preferred, preferred === provider ? current : provider]
+      .find(candidate => getProviderLogoUrl(candidate.logo_path))?.logo_path ?? null
+    unique.set(provider.provider_id, {
+      ...preferred,
+      display_priority: Math.min(current.display_priority, provider.display_priority),
+      logo_path: fallbackLogo,
+    })
   }
   return [...unique.values()].sort((a, b) => a.display_priority - b.display_priority || a.provider_name.localeCompare(b.provider_name))
+}
+
+const homepageProviderNames = [
+  ['netflix'],
+  ['primevideo', 'amazonprimevideo'],
+  ['disneyplus', 'disney'],
+  ['max', 'hbomax'],
+  ['appletvplus', 'appletv'],
+  ['paramountplus', 'paramount'],
+  ['hulu'],
+  ['peacock'],
+  ['crunchyroll'],
+  ['mubi'],
+  ['tubi', 'tubitv'],
+  ['plutotv'],
+]
+
+function normalizedProviderName(providerName: string) {
+  return providerName.toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/** Promotes well-known provider names and collapses duplicate/alias brands in the homepage strip only. */
+export function prioritizeHomepageProviders(providers: WatchProvider[]): WatchProvider[] {
+  const rankByName = new Map(homepageProviderNames.flatMap((aliases, rank) => aliases.map(name => [name, rank] as const)))
+  const grouped = new Map<string, WatchProvider>()
+  for (const provider of providers) {
+    const normalized = normalizedProviderName(provider.provider_name)
+    const rank = rankByName.get(normalized)
+    const identity = rank === undefined ? `name:${normalized}` : `featured:${rank}`
+    const current = grouped.get(identity)
+    if (!current || provider.display_priority < current.display_priority
+      || (provider.display_priority === current.display_priority && provider.provider_id < current.provider_id)) {
+      grouped.set(identity, provider)
+    }
+  }
+  return [...grouped.values()].sort((a, b) => {
+    const rankA = rankByName.get(normalizedProviderName(a.provider_name)) ?? Number.MAX_SAFE_INTEGER
+    const rankB = rankByName.get(normalizedProviderName(b.provider_name)) ?? Number.MAX_SAFE_INTEGER
+    return rankA - rankB
+      || a.display_priority - b.display_priority
+      || a.provider_name.localeCompare(b.provider_name)
+      || a.provider_id - b.provider_id
+  })
 }
 export async function searchMovies(query: string): Promise<Movie[]> {
   if (useLocalDemoCatalog) return query.trim() ? movies.filter(movie => movie.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())) : movies
@@ -294,6 +349,161 @@ export async function searchCatalog(query: string, type: 'movie' | 'tv' | 'all')
   const [data, movieGenres, tvGenres] = await Promise.all([tmdb<{ results: TmdbItem[] }>('/search/multi', { query, include_adult: 'false' }), getGenreNames('movie'), getGenreNames('tv')])
   return data.results.map(item => item.media_type === 'movie' ? normalizeMovie(item, movieGenres) : item.media_type === 'tv' ? normalizeTv(item, tvGenres) : null).filter((item): item is Media => item !== null)
 }
+
+export type DiscoverCatalogFilters = {
+  query: string
+  type: 'movie' | 'tv' | 'all'
+  anime: boolean
+  genre: string
+  year: string
+  language: string
+  sort: CatalogSort
+  providerId?: number
+  region: string
+  monetization: WatchMonetization[]
+}
+export type DiscoverCatalogPage = { results: Media[]; page: number; totalPages: number }
+
+function languageCode(name: string) {
+  return Object.entries(languageNames).find(([, label]) => label.toLowerCase() === name.toLowerCase())?.[0]
+}
+
+export function dedupeMediaByIdentity(items: Media[]) {
+  const seen = new Set<string>()
+  return items.filter(item => {
+    const key = `${item.media_type}:${item.id}`
+    if (!Number.isSafeInteger(item.id) || item.id <= 0 || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+type PagedResponse = { results?: TmdbItem[]; page?: number; total_pages?: number }
+
+async function requestDiscoveryEndpoint(filters: DiscoverCatalogFilters, mediaType: MediaType | 'all', page: number, signal?: AbortSignal): Promise<{ items: Media[]; totalPages: number }> {
+  let path: string
+  const params: Record<string, string> = { page: String(page), include_adult: 'false' }
+  const query = filters.query.trim()
+
+  if (query) {
+    path = mediaType === 'all' ? '/search/multi' : `/search/${mediaType}`
+    params.query = query
+    if (filters.year !== 'Any year') {
+      if (mediaType === 'movie') params.primary_release_year = filters.year
+      else if (mediaType === 'tv') params.first_air_date_year = filters.year
+    }
+  } else if (filters.anime && !filters.providerId) {
+    path = '/discover/tv'
+    params.with_genres = '16'
+    params.with_original_language = 'ja'
+    params.sort_by = 'popularity.desc'
+  } else if (filters.providerId) {
+    if (mediaType === 'all') throw new Error('Provider catalog requests require an individual media type.')
+    path = `/discover/${mediaType}`
+    params.watch_region = filters.region
+    params.with_watch_providers = String(filters.providerId)
+    params.with_watch_monetization_types = filters.monetization.join('|')
+    if (filters.anime) {
+      params.with_genres = '16'
+      params.with_original_language = 'ja'
+    } else if (filters.genre !== 'All films') {
+      const genreId = genreApiId(mediaType, filters.genre)
+      if (genreId === undefined) return { items: [], totalPages: 0 }
+      params.with_genres = String(genreId)
+    }
+    if (filters.year !== 'Any year') params[mediaType === 'movie' ? 'primary_release_year' : 'first_air_date_year'] = filters.year
+    if (filters.language !== 'Any language') {
+      const code = languageCode(filters.language)
+      if (code) params.with_original_language = code
+    }
+    params.sort_by = filters.sort === 'newest'
+      ? mediaType === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc'
+      : filters.sort === 'top_rated' ? 'vote_average.desc' : 'popularity.desc'
+  } else if (filters.genre !== 'All films' || filters.year !== 'Any year' || filters.language !== 'Any language' || filters.sort === 'newest') {
+    if (mediaType === 'all') throw new Error('Filtered discovery requests require an individual media type.')
+    path = `/discover/${mediaType}`
+    const genreId = filters.genre === 'All films' ? undefined : genreApiId(mediaType, filters.genre)
+    if (filters.genre !== 'All films' && genreId === undefined) return { items: [], totalPages: 0 }
+    if (genreId !== undefined) params.with_genres = String(genreId)
+    if (filters.year !== 'Any year') params[mediaType === 'movie' ? 'primary_release_year' : 'first_air_date_year'] = filters.year
+    if (filters.language !== 'Any language') {
+      const code = languageCode(filters.language)
+      if (code) params.with_original_language = code
+    }
+    params.sort_by = filters.sort === 'newest'
+      ? mediaType === 'movie' ? 'primary_release_date.desc' : 'first_air_date.desc'
+      : filters.sort === 'top_rated' ? 'vote_average.desc' : 'popularity.desc'
+  } else if (filters.sort === 'trending') {
+    path = `/trending/${mediaType}/day`
+  } else {
+    path = `/${mediaType}/${filters.sort}`
+  }
+
+  const [data, movieGenres, tvGenres] = await Promise.all([
+    tmdb<PagedResponse>(path, params, signal),
+    getGenreNames('movie'),
+    getGenreNames('tv'),
+  ])
+  const items = (data.results ?? []).map(item => {
+    if (item.media_type === 'movie' || mediaType === 'movie' || (!item.media_type && 'title' in item)) return normalizeMovie(item, movieGenres)
+    if (item.media_type === 'tv' || mediaType === 'tv' || (!item.media_type && 'name' in item)) return normalizeTv(item, tvGenres)
+    return null
+  }).filter((item): item is Media => item !== null)
+  return { items, totalPages: Number.isSafeInteger(data.total_pages) ? Math.max(0, data.total_pages!) : 1 }
+}
+
+async function filterPageByProvider(items: Media[], filters: DiscoverCatalogFilters, signal?: AbortSignal): Promise<Media[]> {
+  if (!filters.providerId) return items
+  let cursor = 0
+  const matches = new Set<string>()
+  const methods = new Set(filters.monetization)
+  const workers = Array.from({ length: Math.min(4, items.length) }, async () => {
+    while (cursor < items.length) {
+      if (signal?.aborted) return
+      const item = items[cursor++]
+      try {
+        const data = await tmdb<AvailabilityResult>(`/${item.media_type}/${item.id}/watch/providers`, {}, signal)
+        const regionData = data.results?.[filters.region]
+        if ([...methods].some(method => regionData?.[method]?.some(provider => provider.provider_id === filters.providerId))) matches.add(`${item.media_type}:${item.id}`)
+      } catch (cause) {
+        if (signal?.aborted) return
+        if (import.meta.env.DEV) console.warn('[TMDB providers] Availability lookup failed.', { mediaType: item.media_type, id: item.id, region: filters.region, cause })
+        throw new Error('Could not verify provider availability for every search result. Please retry the provider filter.')
+      }
+    }
+  })
+  await Promise.all(workers)
+  return items.filter(item => matches.has(`${item.media_type}:${item.id}`))
+}
+
+/** Fetches one real TMDB page for the current discovery filters. TMDB caps catalog pagination at 500 pages. */
+export async function getDiscoverCatalogPage(filters: DiscoverCatalogFilters, page: number, signal?: AbortSignal): Promise<DiscoverCatalogPage> {
+  const requestedPage = Number.isSafeInteger(page) ? Math.max(1, Math.min(page, 500)) : 1
+  if (useLocalDemoCatalog) {
+    const query = filters.query.trim().toLowerCase()
+    const results = movies.filter(item => (filters.type === 'all' || item.media_type === filters.type)
+      && (!query || item.title.toLowerCase().includes(query))
+      && (filters.genre === 'All films' || item.genre.toLowerCase() === filters.genre.toLowerCase())
+      && (filters.year === 'Any year' || mediaYear(item) === filters.year)
+      && (filters.language === 'Any language' || item.language === filters.language))
+    return { results: requestedPage === 1 ? results : [], page: requestedPage, totalPages: 1 }
+  }
+  if (filters.providerId && (!Number.isSafeInteger(filters.providerId) || filters.providerId <= 0 || !/^[A-Z]{2}$/.test(filters.region) || !filters.monetization.length)) {
+    return { results: [], page: requestedPage, totalPages: 0 }
+  }
+
+  const endpointTypes: (MediaType | 'all')[] = filters.query.trim()
+    ? [filters.type]
+    : filters.sort === 'trending' ? ['all'] : filters.type === 'all' ? ['movie', 'tv'] : [filters.type]
+  const pages = await Promise.all(endpointTypes.map(type => requestDiscoveryEndpoint(filters, type, requestedPage, signal)))
+  let results = dedupeMediaByIdentity(pages.flatMap(result => result.items))
+  if (filters.type !== 'all') results = results.filter(item => item.media_type === filters.type)
+  if (filters.anime && filters.query.trim()) results = results.filter(item => item.media_type === 'tv' && item.genre_ids?.includes(16) && item.language === 'Japanese')
+  if (filters.providerId && filters.query.trim()) results = await filterPageByProvider(results, filters, signal)
+  const totalPages = Math.min(500, Math.max(0, ...pages.map(result => result.totalPages)))
+  return { results, page: requestedPage, totalPages }
+}
+
 let animeCatalogCache: Promise<TvShow[]> | undefined
 export function animeTvCatalog(): Promise<TvShow[]> {
   if (useLocalDemoCatalog) return Promise.resolve([])
@@ -311,12 +521,14 @@ export async function getMovieDetails(id: number): Promise<MovieDetails> {
   }
   const data = await tmdb<TmdbItem & { credits?: { cast?: { id: number; name: string; character?: string; profile_path?: string | null }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/movie/' + id, { append_to_response: 'videos,credits,recommendations' })
   const videos = data.videos?.results ?? []
-  return { ...normalizeMovie(data), runtimeMinutes: data.runtime, cast: (data.credits?.cast ?? []).slice(0, 12).map(person => ({ id: person.id, name: person.name, character: person.character ?? '', profilePath: person.profile_path ?? null })), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeMovie(item)) }
+  const officialTrailerKey = videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key
+  return { ...normalizeMovie(data), runtimeMinutes: data.runtime, cast: (data.credits?.cast ?? []).slice(0, 12).map(person => ({ id: person.id, name: person.name, character: person.character ?? '', profilePath: person.profile_path ?? null })), trailerKey: officialTrailerKey ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, officialTrailerKey, recommendations: (data.recommendations?.results ?? []).map(item => normalizeMovie(item)) }
 }
 export async function getTvDetails(id: number): Promise<TvDetails> {
   const data = await tmdb<TmdbItem & { seasons?: TvSeason[]; credits?: { cast?: { id: number; name: string; character?: string; profile_path?: string | null }[] }; videos?: { results?: { site: string; type: string; official?: boolean; key: string }[] }; recommendations?: { results?: TmdbItem[] } }>('/tv/' + id, { append_to_response: 'videos,credits,recommendations' })
   const videos = data.videos?.results ?? []
-  return { ...normalizeTv(data), seasons: data.seasons ?? [], cast: (data.credits?.cast ?? []).slice(0, 12).map(person => ({ id: person.id, name: person.name, character: person.character ?? '', profilePath: person.profile_path ?? null })), trailerKey: videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, recommendations: (data.recommendations?.results ?? []).map(item => normalizeTv(item)) }
+  const officialTrailerKey = videos.find(video => video.site === 'YouTube' && video.type === 'Trailer' && video.official)?.key
+  return { ...normalizeTv(data), seasons: data.seasons ?? [], cast: (data.credits?.cast ?? []).slice(0, 12).map(person => ({ id: person.id, name: person.name, character: person.character ?? '', profilePath: person.profile_path ?? null })), trailerKey: officialTrailerKey ?? videos.find(video => video.site === 'YouTube' && video.type === 'Trailer')?.key, officialTrailerKey, recommendations: (data.recommendations?.results ?? []).map(item => normalizeTv(item)) }
 }
 export async function getTvSeason(id: number, season: number): Promise<TvEpisode[]> {
   const data = await tmdb<{ episodes?: TvEpisode[] }>(`/tv/${id}/season/${season}`)

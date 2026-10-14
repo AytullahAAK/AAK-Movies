@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { syncVideoAudioPreference } from './audioPreference'
+import { FullscreenButton } from './FullscreenButton'
 
 /** A direct browser media URL; the caller is responsible for confirming its rights. */
 export type DirectMediaSource = {
@@ -19,9 +21,14 @@ export function NativeVideoPlayer({ source, title, onError, resumeAtSeconds = 0,
 
 function NativeVideoElement({ source, title, onError, resumeAtSeconds, onProgress, onComplete }: { source: DirectMediaSource; title: string; onError: () => void; resumeAtSeconds: number; onProgress?: (position: number, duration: number) => void; onComplete?: () => void }): ReactElement {
   const video = useRef<HTMLVideoElement>(null)
+  const playerShell = useRef<HTMLDivElement>(null)
   const [speed, setSpeed] = useState('1')
   const lastWrite = useRef(0)
   const latestPosition = useRef({ position: 0, duration: 0 })
+  useEffect(() => {
+    const element = video.current
+    return element ? syncVideoAudioPreference(element) : undefined
+  }, [source.url])
   useEffect(() => {
     const saveOnExit = () => {
       const { position, duration } = latestPosition.current
@@ -50,15 +57,20 @@ function NativeVideoElement({ source, title, onError, resumeAtSeconds, onProgres
     setSpeed(value)
     if (video.current) video.current.playbackRate = Number(value)
   }
-  return <div className="native-video-player">
-    <video ref={video} controls playsInline preload="metadata" aria-label={title} onLoadedMetadata={resume} onTimeUpdate={() => recordProgress()} onPause={() => recordProgress(true)} onEnded={() => { onComplete?.(); latestPosition.current = { position: 0, duration: 0 } }} onError={onError}>
-      <source src={source.url} type={source.contentType} />
-      Your browser does not support this video format.
-    </video>
-    <label className="playback-speed">Playback speed
-      <select value={speed} onChange={event => changeSpeed(event.target.value)} aria-label="Playback speed">
-        <option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
-      </select>
-    </label>
+  return <div className="native-video-player" ref={playerShell}>
+    <div className="native-video-frame">
+      <video ref={video} controls playsInline preload="metadata" aria-label={title} onLoadedMetadata={resume} onTimeUpdate={() => recordProgress()} onPause={() => recordProgress(true)} onEnded={() => { onComplete?.(); latestPosition.current = { position: 0, duration: 0 } }} onError={onError}>
+        <source src={source.url} type={source.contentType} />
+        Your browser does not support this video format.
+      </video>
+    </div>
+    <div className="native-player-toolbar" role="group" aria-label="Video player controls">
+      <FullscreenButton targetRef={playerShell} />
+      <label className="playback-speed">Playback speed
+        <select value={speed} onChange={event => changeSpeed(event.target.value)} aria-label="Playback speed">
+          <option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+        </select>
+      </label>
+    </div>
   </div>
 }
